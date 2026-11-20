@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
+	"github.com/daviddwlee84/lazylongarm/internal/ui/theme"
 )
 
 func key(s string) tea.KeyPressMsg {
@@ -170,7 +172,206 @@ func TestPanelKeyOpensDirectURLWithoutTunnel(t *testing.T) {
 	if !ids["panel-access"] || !ids["panel"] {
 		t.Fatalf("hub actions: %v", ids)
 	}
-	if !strings.Contains(m.panelLine(&cfg.Hubs[0]), "tail1234.ts.net") {
-		t.Fatal(m.panelLine(&cfg.Hubs[0]))
+	if v, _ := m.panelLine(&cfg.Hubs[0]); !strings.Contains(v, "tail1234.ts.net") {
+		t.Fatal(v)
+	}
+}
+
+// screenPos finds text on the rendered screen (zero-based cell coordinates).
+func screenPos(t *testing.T, m *Model, text string) (int, int) {
+	t.Helper()
+	for y, l := range strings.Split(ansi.Strip(viewText(m)), "\n") {
+		if x := strings.Index(l, text); x >= 0 {
+			return ansi.StringWidth(l[:x]), y
+		}
+	}
+	t.Fatalf("%q not on screen:\n%s", text, ansi.Strip(viewText(m)))
+	return 0, 0
+}
+
+func clickAt(m *Model, x, y int) {
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+}
+
+func TestMouseTabsRowsAndWheel(t *testing.T) {
+	m := demoModel(true, 120, 32)
+	clickOn(t, m, "2 Jobs")
+	if m.tab != tabJobs {
+		t.Fatalf("tab %d", m.tab)
+	}
+	clickOn(t, m, "1 Fleet")
+	x, y := mustPos(t, m, "gpu-01")
+	clickAt(m, x, y)
+	if m.selected[tabFleet] != "gpu-01" || m.focusDetail {
+		t.Fatalf("row click: %q focusDetail %v", m.selected[tabFleet], m.focusDetail)
+	}
+	m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
+	if m.selected[tabFleet] == "gpu-01" {
+		t.Fatal("wheel over the list did not move the selection")
+	}
+}
+
+func mustPos(t *testing.T, m *Model, text string) (int, int) { return screenPos(t, m, text) }
+
+func clickOn(t *testing.T, m *Model, text string) {
+	t.Helper()
+	x, y := screenPos(t, m, text)
+	clickAt(m, x, y)
+}
+
+func TestMouseFooterActionNeedsSameTargetAndState(t *testing.T) {
+	m := demoModel(true, 120, 32)
+	m.Update(key("2"))
+	x, y := mustPos(t, m, "K kill")
+	// Released elsewhere: nothing.
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseReleaseMsg{X: x + 30, Y: y, Button: tea.MouseLeft})
+	if m.overlay != "" {
+		t.Fatal("release off the hint ran the action")
+	}
+	// The layout changed between press and release: nothing.
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.WindowSizeMsg{Width: 121, Height: 32})
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if m.overlay != "" {
+		t.Fatal("stale press ran the action after a resize")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	clickAt(m, x, y)
+	if m.overlay != "confirm" || m.confirmFocus != 1 {
+		t.Fatalf("kill hint: overlay %q focus %d", m.overlay, m.confirmFocus)
+	}
+	// The modal owns the mouse: a click on a row behind it does nothing,
+	// and clicking Cancel closes it without killing.
+	clickAt(m, 5, 4)
+	if m.overlay != "confirm" {
+		t.Fatal("click outside the confirmation closed or passed through it")
+	}
+	clickOn(t, m, "Cancel")
+	if m.overlay != "" || m.status != "canceled" {
+		t.Fatalf("cancel button: overlay %q status %q", m.overlay, m.status)
+	}
+}
+
+func TestMouseToggleAndOption(t *testing.T) {
+	m := demoModel(true, 120, 32)
+	if m.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("mouse should be captured by default")
+	}
+	m.Update(key("M"))
+	if m.View().MouseMode != tea.MouseModeNone {
+		t.Fatal("M did not release the mouse")
+	}
+	clickOn(t, m, "2 Jobs")
+	if m.tab != tabFleet {
+		t.Fatal("clicks must be ignored while the mouse is off")
+	}
+	if New(Options{}).View().MouseMode != tea.MouseModeNone {
+		t.Fatal("Options.Mouse=false must not capture the mouse")
+	}
+}
+
+func TestDragCopiesWholeLines(t *testing.T) {
+	m := demoModel(false, 120, 32)
+	var copied string
+	m.opts.Clipboard = func(s string) error { copied = s; return nil }
+	m.Update(key("2"))
+	x, y := mustPos(t, m, "TestCase38 (0.38s)")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x + 2, Y: y + 1, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: x + 2, Y: y + 1, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("no copy command")
+	}
+	for _, msg := range runBatch(cmd) {
+		m.Update(msg)
+	}
+	if copied != "--- PASS: TestCase38 (0.38s)\n=== RUN   TestCase39" {
+		t.Fatalf("copied %q", copied)
+	}
+	if !strings.Contains(m.status, "copied 2 lines") {
+		t.Fatalf("status %q", m.status)
+	}
+	// A plain click (no drag) only focuses the pane.
+	copied = ""
+	clickAt(m, x, y)
+	if copied != "" || !m.focusDetail {
+		t.Fatalf("click copied %q focus %v", copied, m.focusDetail)
+	}
+}
+
+// runBatch runs a command and the commands of a batch, collecting messages
+// (OSC 52 writes come back as internal messages and are ignored here).
+func runBatch(cmd tea.Cmd) []tea.Msg {
+	msg := cmd()
+	if b, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range b {
+			if c != nil {
+				out = append(out, runBatch(c)...)
+			}
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+func TestSelectedRowKeepsStatusColor(t *testing.T) {
+	m := demoModel(true, 120, 32)
+	m.th = theme.New(true, true)
+	line := ""
+	for _, l := range strings.Split(viewText(m), "\n") {
+		if strings.Contains(ansi.Strip(l), "build-box") && strings.Contains(ansi.Strip(l), "▌") {
+			line = l
+		}
+	}
+	green := m.th.OK.Inherit(m.th.Sel).Render(pad("online", 10))
+	if !strings.Contains(line, green) {
+		t.Fatalf("selected row lost its status color: %q", line)
+	}
+}
+
+func TestDetailScrollIsBounded(t *testing.T) {
+	m := demoModel(true, 120, 32)
+	m.Update(key("tab"))
+	for i := 0; i < 50; i++ {
+		m.Update(key("j"))
+	}
+	l := m.layout()
+	if l.dOff != l.dMax || m.detailScroll > l.dMax {
+		t.Fatalf("scroll %d off %d max %d", m.detailScroll, l.dOff, l.dMax)
+	}
+}
+
+func TestEverySizeRendersWithinBounds(t *testing.T) {
+	for _, setup := range []func(*Model){
+		func(m *Model) {},
+		func(m *Model) { m.Update(key("2")) },
+		func(m *Model) { m.Update(key("3")) },
+		func(m *Model) { m.Update(key("?")) },
+		func(m *Model) { m.Update(key("2")); m.Update(key("K")) },
+		func(m *Model) { m.Update(key("tab")) },
+	} {
+		for w := 20; w <= 140; w += 7 {
+			for h := 8; h <= 44; h += 5 {
+				m := demoModel(true, 120, 32)
+				setup(m)
+				m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				lines := strings.Split(viewText(m), "\n")
+				if len(lines) != h {
+					t.Fatalf("%dx%d: %d lines", w, h, len(lines))
+				}
+				for i, l := range lines {
+					if lw := ansi.StringWidth(l); lw > w {
+						t.Fatalf("%dx%d line %d is %d wide: %q", w, h, i, lw, ansi.Strip(l))
+					}
+				}
+				x, y := w/2, h/2 // the mouse never panics either
+				m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+				m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
+				m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+			}
+		}
 	}
 }

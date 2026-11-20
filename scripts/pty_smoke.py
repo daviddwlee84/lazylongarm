@@ -13,6 +13,7 @@ the script can assert that canceled wizards changed nothing.
 import codecs
 import fcntl
 import os
+import re
 from pathlib import Path
 import pty
 import select
@@ -54,6 +55,12 @@ case "$1 $2" in
   logs*) printf 'hello from the job\nsecond line\n';;
   *) echo "unexpected longarm $*" >&2; exit 2;;
 esac
+"""
+
+# Stand-ins for the local clipboard tools, so copying never touches the real
+# clipboard and the test can read what was copied.
+FAKE_CLIP = r"""#!/bin/sh
+cat > "$FAKE_CLIP"
 """
 
 FAKE_HC = r"""#!/bin/sh
@@ -106,6 +113,7 @@ class Terminal:
         self.screen = Screen(cols, rows)
         self.stream = Stream(self.screen)
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.raw = b""  # everything the program wrote, for escape-sequence checks
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
         def child():
@@ -128,6 +136,7 @@ class Terminal:
                 break
             if not data:
                 break
+            self.raw += data
             if b"\x1b[6n" in data:
                 os.write(self.master, b"\x1b[1;1R")
             self.stream.feed(self.decoder.decode(data))
@@ -135,6 +144,19 @@ class Terminal:
     def send(self, data):
         os.write(self.master, data.encode() if isinstance(data, str) else data)
         self.read()
+
+    def find(self, needle):
+        """Zero-based (x, y) of needle on screen."""
+        for y, line in enumerate(self.screen.display):
+            x = line.find(needle)
+            if x >= 0:
+                return x, y
+        raise AssertionError(f"{needle!r} not on screen\n{self.text()}")
+
+    def click(self, x, y):
+        """Left click at zero-based (x, y) as SGR mouse reports (one-based)."""
+        self.send(f"\x1b[<0;{x + 1};{y + 1}M")
+        self.send(f"\x1b[<0;{x + 1};{y + 1}m")
 
     def text(self):
         return "\n".join(line.rstrip() for line in self.screen.display)
@@ -161,7 +183,7 @@ class Terminal:
 def environment(root):
     fake = root / "bin"
     fake.mkdir()
-    for name, body in (("ssh", FAKE_SSH), ("longarm", FAKE_LONGARM), ("hc", FAKE_HC)):
+    for name, body in (("ssh", FAKE_SSH), ("longarm", FAKE_LONGARM), ("hc", FAKE_HC), ("pbcopy", FAKE_CLIP), ("xclip", FAKE_CLIP)):
         p = fake / name
         p.write_text(body)
         p.chmod(0o755)
@@ -181,6 +203,7 @@ def environment(root):
         "FAKE_LOG": str(root / "fake.log"),
         "FAKE_PROBE": str(root / "probe.txt"),
         "FAKE_SLOW": str(root / "slow"),
+        "FAKE_CLIP": str(root / "clipboard.txt"),
         "FIXTURES": str(FIXTURES),
         "TERM": "xterm-256color",
         "LANG": "en_US.UTF-8",
@@ -220,7 +243,7 @@ def wizard_cancel(env, log):
     assert "fakehub.example.com" in t.text(), t.text()
     t.send("\x13")  # Ctrl+S: Review from any field
     t.wait("Review")
-    assert "[ Back   ]" in t.text(), "Review must default to Back"
+    assert "[ Back ]" in t.text(), "Review must default to Back"
     for _ in range(12):
         t.send("j")  # scroll the plan
     t.wait("public_addr")
@@ -299,6 +322,58 @@ def panel_access_cancel(env, log):
     print("hub panel-access (wizard/review/cancel, nothing applied): ok")
 
 
+def mouse(env):
+    """Mouse capture is on by default: clicks switch tabs and fire footer
+    actions on release; M turns capture off and back on."""
+    t = Terminal([], env)
+    t.wait("worker-1")
+    assert b"\x1b[?1002h" in t.raw and b"\x1b[?1006h" in t.raw, "cell-motion SGR mouse not enabled"
+    t.click(*t.find("2 Jobs"))
+    t.wait("Job · log tail")
+    t.wait("hello from the job")
+    # Drag over the two log lines: they are copied whole (OSC 52 + local).
+    x, y = t.find("hello from the job")
+    t.send(f"\x1b[<0;{x + 1};{y + 1}M")
+    t.send(f"\x1b[<32;{x + 3};{y + 2}M")  # motion with the left button held
+    t.send(f"\x1b[<0;{x + 3};{y + 2}m")
+    t.wait("copied 2 lines")
+    assert b"\x1b]52;c;" in t.raw, "no OSC 52 clipboard write"
+    clip = Path(env["FAKE_CLIP"])
+    deadline = time.monotonic() + 5
+    while not clip.exists() and time.monotonic() < deadline:
+        t.read(0.1)
+    assert clip.read_text() == "hello from the job\nsecond line", repr(clip.read_text())
+    x, y = t.find("? help")
+    t.click(x, y)
+    t.wait("Help · Jobs")
+    t.click(0, 0)  # outside the modal: closes it, nothing behind reacts
+    t.wait("Job · log tail")
+    assert "Help · Jobs" not in t.text(), t.text()
+    t.click(*t.find("1 Fleet"))
+    t.wait("Workers")
+    before = len(t.raw)
+    t.send("M")
+    t.wait("mouse off")
+    assert b"\x1b[?1002l" in t.raw[before:], "M did not release the mouse"
+    t.send("M")
+    t.wait("mouse on")
+    t.send("q")
+    assert t.exit_code() == 0
+    print("mouse (tabs, drag-to-copy, footer help, modal outside click, M toggle): ok")
+
+
+def no_color(env):
+    """NO_COLOR keeps the layout and its markers but emits no colors."""
+    t = Terminal([], {**env, "NO_COLOR": "1"})
+    t.wait("worker-1")
+    assert "[1 Fleet" in t.text(), t.text()
+    colors = re.findall(rb"\x1b\[[0-9;]*(?:3[0-7]|9[0-7]|4[0-7]|10[0-7]|38;5|48;5|38;2|48;2)[0-9;]*m", t.raw)
+    assert not colors, f"NO_COLOR dashboard emitted colors: {colors[:5]}"
+    t.send("q")
+    assert t.exit_code() == 0
+    print("NO_COLOR dashboard (markers kept, no colors): ok")
+
+
 def narrow(env):
     t = Terminal([], env, cols=64, rows=18)
     t.wait("worker-1")
@@ -320,6 +395,8 @@ def main():
         ctrl_c_in_handoff(env, root)
         companion_remotes_cancel(env, root / "fake.log")
         panel_access_cancel(env, root / "fake.log")
+        mouse(env)
+        no_color(env)
         narrow(env)
 
 

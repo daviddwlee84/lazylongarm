@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/tui"
 )
@@ -53,6 +54,9 @@ func runDashboard(parent context.Context, o *options) error {
 			if o.configPath != "" {
 				args = append([]string{"--config", o.configPath}, args...)
 			}
+			if o.color != "" && o.color != "auto" { // wizards follow the dashboard's --color
+				args = append([]string{"--color", o.color}, args...)
+			}
 			root, sub := New(o.deps)
 			sub.in, sub.out, sub.err = in, out, errOut
 			root.SetArgs(args)
@@ -61,9 +65,11 @@ func runDashboard(parent context.Context, o *options) error {
 			root.SetErr(errOut)
 			return root.ExecuteContext(ctx)
 		},
-		Refresh: refresh,
-		OpenURL: openBrowser,
-		Color:   o.colorEnabled(o.out),
+		Refresh:   refresh,
+		OpenURL:   openBrowser,
+		Color:     o.colorEnabled(o.out),
+		Mouse:     o.cfg.TUI.MouseEnabled(),
+		Clipboard: clipboard.WriteAll,
 	})
 	defer model.Close()
 	_, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(o.in), tea.WithOutput(o.out)).Run()

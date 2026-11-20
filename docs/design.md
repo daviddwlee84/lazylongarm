@@ -6,6 +6,7 @@
 cmd/lazylongarm        → internal/cli.Execute (exit codes, JSON error envelope)
 internal/cli           Cobra tree; wizards = sequences of internal/wizard forms
 internal/tui           dashboard; wizards run in-process via tea.Exec handoff
+internal/ui/theme      semantic styles (accent, muted, ok/warn/err, chips, boxes) shared by tui, wizard, apply output
 internal/flows         HubRequest/WorkerRequest + facts → plan.Plan (Build*, Validate*)
 internal/plan          Step{Check,Apply,Verify}, Runner, Journal, digest, Render/JSON
 internal/connection    system ssh/sh runner, sudo -n + interactive handoff, tunnels
@@ -59,6 +60,12 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
   them too. When unknown keys are present the file is written from maps, so
   keys come out sorted; otherwise struct order is kept. Malformed TOML, type
   mismatches and failed validation still refuse to load.
+- **One layout for drawing and clicking.** The dashboard and the forms compute
+  a pure layout (pane rectangles, rows, footer hints, buttons) that both `View`
+  and the mouse handler use. Tabs and rows act on press; actions and buttons
+  act on release, only on the same target with unchanged state; an open modal
+  takes every click. Meaning never depends on color alone: focus (`┃`, `▌`),
+  the option cursor (`›`) and chosen values (`●`, `[x]`) have distinct markers.
 
 ## Companions
 
@@ -72,5 +79,5 @@ live in the user's config; the code and docs carry only placeholders.
 ## Not done (see TODO)
 
 Release channel and `upgrade`, minisign verification, non-apt hub hosts,
-private-network hub recipe automation, Windows workers, mouse support, more
-cloud providers, `hub uninstall`.
+private-network hub recipe automation, Windows workers, more cloud providers,
+`hub uninstall`.
