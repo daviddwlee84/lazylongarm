@@ -44,7 +44,10 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
 - Hub setup targets Debian/Ubuntu via the official apt repository and
   `longarm-hub.service`; the panel listens on 127.0.0.1:7480 only
   (`lazylongarm hub panel` tunnels it for a human).
-- Worker add pushes verified release binaries to `~/.local/bin`, mints a
+- Worker add installs verified release binaries in `~/.local/bin` (`--fetch
+  auto`, the default: the machine downloads them from GitHub, checked against
+  the SHA256SUMS lazylongarm fetched, else they are pushed over ssh; `push`
+  for machines without GitHub access; `remote` without fallback), mints a
   15-minute join code (admin join code + approve for admins, else an owner
   code), passes it over ssh stdin, installs the service and waits until
   `longarm worker ls --json` shows it online. The machine's own `longarm`

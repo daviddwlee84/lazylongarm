@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeSSH replaces ssh with this test binary; argv is echoed to stderr for
@@ -56,6 +57,13 @@ func TestHelperSSH(t *testing.T) {
 	case "fail":
 		fmt.Fprintln(os.Stderr, "\x1b[31mboom\x1b[0m")
 		os.Exit(3)
+	case "stall": // connected, then nothing moves
+		time.Sleep(5 * time.Second)
+	case "trickle": // slow but steady progress, longer than the stall timeout
+		for i := 1; i <= 8; i++ {
+			fmt.Printf("lazylongarm-progress %d\n", i*100)
+			time.Sleep(60 * time.Millisecond)
+		}
 	}
 	os.Exit(0)
 }

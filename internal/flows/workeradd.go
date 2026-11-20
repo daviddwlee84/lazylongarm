@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/hostprobe"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
-	"github.com/daviddwlee84/lazylongarm/internal/release"
 	"github.com/daviddwlee84/lazylongarm/internal/secret"
 )
 
@@ -41,7 +39,11 @@ type WorkerRequest struct {
 	Service       string   // ServiceSystem | ServiceUser
 	DirectTailnet bool     // also listen on the tailnet IP (+ hub relay) for direct paths
 	Hub           *config.Hub
-	Version       string // release tag for pushed binaries
+	Version       string // release tag of the installed binaries
+	// Fetch is how the binaries reach the machine: FetchAuto (default),
+	// FetchPush or FetchRemote. This machine (Host == "") always installs
+	// from the local verified cache.
+	Fetch string
 	// Mint selects how the join code is created: MintAdmin (`longarm admin
 	// join-code` + `admin approve`, a fleet worker; works for any admin) or
 	// MintOwner (`longarm worker add`, a worker owned by the caller's Longarm
@@ -65,6 +67,9 @@ type WorkerDeps struct {
 	CacheDir string
 	// Fetch returns a verified local copy of a release asset.
 	Fetch func(ctx context.Context, tag, asset string, logf func(string, ...any)) (string, error)
+	// Checksum returns an asset's sha256 from the release's SHA256SUMS
+	// without downloading the asset (nil: Fetch it and hash the copy).
+	Checksum func(ctx context.Context, tag, asset string) (string, error)
 	// Online waits for a worker to report online (injectable for tests).
 	PollInterval time.Duration
 	WaitTimeout  time.Duration
@@ -88,6 +93,9 @@ func WorkerDefaults(req WorkerRequest, f *hostprobe.Facts) WorkerRequest {
 	if req.Mint == "" {
 		req.Mint = MintAdmin
 	}
+	if req.Fetch == "" {
+		req.Fetch = FetchAuto
+	}
 	return req
 }
 
@@ -109,6 +117,9 @@ func ValidateWorker(req WorkerRequest, f *hostprobe.Facts) error {
 	}
 	if req.Service != ServiceSystem && req.Service != ServiceUser {
 		problems = append(problems, "service must be system or user")
+	}
+	if !validFetch(req.Fetch) {
+		problems = append(problems, fmt.Sprintf("fetch %q must be auto, push or remote", req.Fetch))
 	}
 	if f != nil {
 		if f.OS != "linux" && f.OS != "darwin" {
@@ -173,6 +184,7 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 			{"worker name", req.Name},
 			{"hub", hub.Address + " (" + hub.ID + ")"},
 			{"binaries", fmt.Sprintf("longarmd + longarm %s → %s", orLatest(tag), binDir)},
+			{"fetch", fetchSummary(req.Fetch, host)},
 			{"service", svcDesc},
 			{"reachable", path},
 			{"ownership", map[string]string{MintAdmin: "fleet worker (admin join code, approved by you right after it joins)", MintOwner: "your own worker: only you can run jobs on it until you share it"}[req.Mint]},
@@ -196,92 +208,8 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 	}
 
 	// 1. binaries
-	type asset struct{ component, dest string }
-	assets := []asset{{"longarmd", longarmdPath}, {"longarm", longarmPath}}
-	resolveTag := func(ctx context.Context, env *plan.Env) (string, error) {
-		if t := env.Get("release_tag"); t != "" {
-			return t, nil
-		}
-		t := tag
-		if t == "" {
-			var err error
-			if t, err = release.Latest(ctx); err != nil {
-				return "", err
-			}
-		}
-		env.Set("release_tag", t)
-		return t, nil
-	}
-	p.Steps = append(p.Steps, plan.Step{
-		ID: "binaries", Title: "Install longarmd + longarm into " + binDir, Idempotent: true,
-		Actions: []plan.Action{
-			{Where: "local", Display: fmt.Sprintf("download %s and %s (%s) from GitHub, verify SHA256SUMS (cached)", release.AssetName("longarmd", f.OS, f.Arch), release.AssetName("longarm", f.OS, f.Arch), orLatest(tag))},
-			{Where: where, Display: "copy to " + longarmdPath + " and " + longarmPath + " (0755, via ssh stdin, atomic rename)"},
-		},
-		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
-			t, err := resolveTag(ctx, env)
-			if err != nil {
-				return false, err
-			}
-			for _, a := range assets {
-				local, err := deps.Fetch(ctx, t, release.AssetName(a.component, f.OS, f.Arch), env.Logf)
-				if err != nil {
-					return false, err
-				}
-				want, err := release.SHA256(local)
-				if err != nil {
-					return false, err
-				}
-				r := run(`if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi 2>/dev/null | cut -d' ' -f1`, a.dest)
-				r.Timeout = 30 * time.Second
-				res, err := env.RunQuiet(ctx, r)
-				if err != nil {
-					var ce *connection.CommandError
-					if errors.As(err, &ce) {
-						return false, nil
-					}
-					return false, err
-				}
-				if strings.TrimSpace(string(res.Stdout)) != want {
-					return false, nil
-				}
-			}
-			env.Logf("  %s already has longarmd/longarm %s", f.Where(), env.Get("release_tag"))
-			return true, nil
-		},
-		Apply: func(ctx context.Context, env *plan.Env) error {
-			t, err := resolveTag(ctx, env)
-			if err != nil {
-				return err
-			}
-			for _, a := range assets {
-				local, err := deps.Fetch(ctx, t, release.AssetName(a.component, f.OS, f.Arch), env.Logf)
-				if err != nil {
-					return err
-				}
-				data, err := os.ReadFile(local)
-				if err != nil {
-					return err
-				}
-				if host == "" && samePath(local, a.dest) {
-					continue
-				}
-				env.Logf("  copying %s (%.1f MB) → %s:%s", filepath.Base(local), float64(len(data))/1e6, where, a.dest)
-				if err := connection.PushFile(ctx, host, data, a.dest, "0755"); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-		Verify: func(ctx context.Context, env *plan.Env) error {
-			res, err := env.RunQuiet(ctx, run(`"$1" --version 2>/dev/null || "$1" version`, longarmdPath))
-			if err != nil {
-				return fmt.Errorf("installed longarmd does not run on %s: %w", f.Where(), err)
-			}
-			env.Logf("  longarmd %s", hostprobe.ExtractVersion(strings.TrimSpace(string(res.Stdout))))
-			return nil
-		},
-	})
+	p.Steps = append(p.Steps, binariesStep(host, where, f, tag, effectiveFetch(req.Fetch, host), binDir,
+		[]binary{{"longarmd", longarmdPath}, {"longarm", longarmPath}}, deps))
 
 	// 2. enroll
 	enrolled := func(ctx context.Context, env *plan.Env) (bool, error) {

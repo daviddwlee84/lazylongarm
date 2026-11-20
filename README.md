@@ -79,8 +79,20 @@ is already in place; the journal lives in `$XDG_STATE_HOME/lazylongarm/ops/`.
 
 ### What `worker add` does
 
-1. Copies verified `longarmd`/`longarm` for the machine's OS/arch into its
-   `~/.local/bin` (via ssh stdin; skipped when identical).
+1. Installs verified `longarmd`/`longarm` for the machine's OS/arch into its
+   `~/.local/bin`; a binary whose sha256 already matches the release's
+   `SHA256SUMS` is left alone. `--fetch` picks how they get there:
+   - `auto` (default): the machine downloads them from GitHub itself (`curl`,
+     else `wget`) and checks each against the sha256 this machine read from
+     `SHA256SUMS`; only then is it renamed into place. On any download failure
+     (no route, 10 s connect timeout, under 32 KiB/s for 20 s, checksum
+     mismatch) this machine pushes them instead and says so.
+   - `push`: this machine downloads and verifies them once (cached) and copies
+     them over ssh stdin, for machines without GitHub access. The copy is
+     checked (size + sha256) before the rename and fails after 60 s without
+     progress, not after a fixed time.
+   - `remote`: the machine downloads them, no fallback; a mismatch installs
+     nothing.
 2. Mints a 15-minute join code (`longarm admin join-code --role worker` +
    `admin approve` with an admin certificate, else an owner code from
    `longarm worker add`) and passes it to `longarmd join` **over ssh stdin**
@@ -120,7 +132,7 @@ back with `longarm admin revoke <worker>-client`.
 | `hub panel-user [NAME]` | create a web panel login (password + TOTP) |
 | `hub backup` | stop briefly, archive `/var/lib/longarm-hub` into the state dir (0600) |
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
-| `worker add [host] \| --local` | bootstrap a worker (wizard, or flags) |
+| `worker add [host] \| --local` | bootstrap a worker (wizard, or flags; `--fetch auto\|push\|remote`) |
 | `peer add [host] \| --local` | a worker whose own longarm is also enrolled as a client (`--client-name`, `--client-user`) |
 | `worker ls` | hub registry merged with machines lazylongarm manages |
 | `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
