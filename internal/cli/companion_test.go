@@ -98,3 +98,17 @@ func TestCompanionDotfilesNeedsRepoWhenNotInTerminal(t *testing.T) {
 		t.Fatalf("%d %s", code, errOut)
 	}
 }
+
+func TestCompanionStatusSurvivesAListError(t *testing.T) {
+	tools := fakeTools("")
+	tools.Run = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("socket path too long")
+	}
+	code, out, errOut := runWith(t, fleetCfg, tools, "companion", "status", "--no-remote", "--json")
+	if code != 0 || !strings.Contains(out, `"hc": "error"`) || !strings.Contains(out, "socket path too long") {
+		t.Fatalf("%d %s %s", code, out, errOut)
+	}
+	if code, _, errOut := runWith(t, fleetCfg, tools, "companion", "remotes", "--all", "--tool", "hc", "--dry-run"); code != 1 || !strings.Contains(errOut, "socket path too long") {
+		t.Fatalf("remotes must fail on an unreadable list: %d %s", code, errOut)
+	}
+}

@@ -286,6 +286,7 @@ func (m *Model) detailLines(w int) []string {
 			kv("version", r.Version),
 			kv("path", r.Path+m.st("8", "  (relay = through the hub; direct = tcp endpoint)")),
 			kv("owner", r.Owner),
+			kv("labels", dash(r.LabelText())),
 			kv("cpu", bar(r.CPU, 20)+fmt.Sprintf(" %.0f%%", r.CPU)),
 			kv("memory", bar(r.Mem, 20)+fmt.Sprintf(" %.0f%%", r.Mem)),
 			kv("jobs", fmt.Sprint(r.Jobs)),

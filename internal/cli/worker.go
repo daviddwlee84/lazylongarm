@@ -321,9 +321,9 @@ func workerListCommand(o *options) *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "! hub registry unavailable: %v\n", lerr)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "WORKER\tSTATE\tPATH\tPLATFORM\tCPU%\tMEM%\tJOBS\tSSH\tVERSION")
+			fmt.Fprintln(tw, "WORKER\tSTATE\tPATH\tPLATFORM\tCPU%\tMEM%\tJOBS\tSSH\tVERSION\tLABELS")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f\t%.0f\t%d\t%s\t%s\n", r.Name, r.State, dash(r.Path), dash(r.Platform), r.CPU, r.Mem, r.Jobs, dash(r.SSHHost), dash(r.Version))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f\t%.0f\t%d\t%s\t%s\t%s\n", r.Name, r.State, dash(r.Path), dash(r.Platform), r.CPU, r.Mem, r.Jobs, dash(r.SSHHost), dash(r.Version), dash(r.LabelText()))
 			}
 			return tw.Flush()
 		},

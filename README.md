@@ -10,6 +10,9 @@ of Longarm's stable CLI contract (`--json` output, exit codes, feature names).
 It never reads Longarm's internal files or daemon API, never stores join codes
 or passwords, and hands ssh/sudo prompts to your real terminal.
 
+Docs: <https://daviddwlee84.github.io/lazylongarm/>, including
+[why you would use it instead of plain `longarm`](https://daviddwlee84.github.io/lazylongarm/why/).
+
 > Status: early (v0.1). Verified against Longarm v0.1.42 with a macOS client,
 > an Ubuntu 24.04 hub on Azure and Linux + macOS workers.
 

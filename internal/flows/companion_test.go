@@ -86,7 +86,7 @@ func TestCompanionDotfilesBootstrapRecordsState(t *testing.T) {
 	cfg := dotfilesCfg(t)
 	state := companion.DotfilesState{}
 	deps := DotfilesDeps{Config: cfg, State: func(context.Context, *plan.Env, string) (companion.DotfilesState, error) { return state, nil }}
-	req := DotfilesRequest{Host: "worker-1", Name: "worker-1", Repo: "https://github.com/you/dotfiles.git", Bundle: "server"}
+	req := DotfilesRequest{Host: "worker-1", Name: "worker-1", Repo: "https://github.com/you/dotfiles.git", Bundle: "server", Interactive: true}
 	p, err := BuildCompanionDotfiles(req, f, state, deps)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestCompanionDotfilesBootstrapRecordsState(t *testing.T) {
 		t.Fatalf("steps %s", got)
 	}
 	js, _ := json.Marshal(p.JSON())
-	if !strings.Contains(string(js), "chezmoi init --apply --promptDefaults 'https://github.com/you/dotfiles.git'") {
+	if !strings.Contains(string(js), "chezmoi init --apply 'https://github.com/you/dotfiles.git'") || !strings.Contains(string(js), "ask: chezmoi prompts in your terminal") {
 		t.Fatalf("dry-run json: %s", js)
 	}
 	env := plan.NewEnv()
@@ -108,7 +108,7 @@ func TestCompanionDotfilesBootstrapRecordsState(t *testing.T) {
 	if _, err := (&plan.Runner{}).Run(context.Background(), p, env, p.Digest()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, "get.chezmoi.io") || !strings.HasPrefix(script, companion.RemotePath) {
+	if !strings.Contains(script, "get.chezmoi.io") || !strings.HasPrefix(script, companion.RemotePath) || strings.Contains(script, "promptDefaults") {
 		t.Fatalf("script %s", script)
 	}
 	tg, _ := cfg.TargetByHost("worker-1")
@@ -175,5 +175,38 @@ func TestCompanionDotfilesUpdateNeedsNoRepo(t *testing.T) {
 	p, err = BuildCompanionDotfiles(DotfilesRequest{Host: "h"}, ubuntu(), mine, DotfilesDeps{})
 	if err != nil || !strings.Contains(p.Steps[0].Actions[0].Display, "already set up") {
 		t.Fatalf("skip plan: %v %+v", err, p)
+	}
+}
+
+func TestCompanionDotfilesAnswerModes(t *testing.T) {
+	f := ubuntu()
+	f.Has["git"] = true
+	none := companion.DotfilesState{}
+	if _, err := BuildCompanionDotfiles(DotfilesRequest{Host: "h", Repo: "you"}, f, none, DotfilesDeps{}); err == nil || !strings.Contains(err.Error(), "needs a terminal") {
+		t.Fatalf("ask without terminal: %v", err)
+	}
+	preset, err := companion.ResolveAnswers("server", "", "", map[string]map[string]any{"server": {"profile": "ubuntu_server"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildCompanionDotfiles(DotfilesRequest{Host: "h", Repo: "you", Answers: preset}, f, none, DotfilesDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	p.Render(&b)
+	for _, want := range []string{"--promptString 'profile=ubuntu_server' --promptChoice 'profile=ubuntu_server' --promptDefaults 'you'", "prompts the preset does not answer take their defaults", `preset "server"`} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("review lacks %q:\n%s", want, b.String())
+		}
+	}
+	p, err = BuildCompanionDotfiles(DotfilesRequest{Host: "h", Repo: "you", Answers: companion.Answers{Mode: companion.AnswersDefaults}, Interactive: true}, f, none, DotfilesDeps{})
+	if err != nil || !strings.Contains(p.Steps[0].Actions[0].Display, "init --apply --promptDefaults 'you'") {
+		t.Fatalf("defaults: %v %+v", err, p.Steps[0].Actions)
+	}
+	mine := companion.DotfilesState{Source: "/s", Origin: "https://github.com/you/dotfiles"}
+	p, err = BuildCompanionDotfiles(DotfilesRequest{Host: "h", Update: true, Interactive: true}, f, mine, DotfilesDeps{})
+	if err != nil || p.Steps[0].Actions[0].Display != "chezmoi update --init" {
+		t.Fatalf("interactive update asks new prompts: %v %+v", err, p.Steps[0].Actions)
 	}
 }

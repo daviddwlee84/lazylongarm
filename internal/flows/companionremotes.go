@@ -112,6 +112,11 @@ func remoteStep(tool string, t RemoteTarget, tools companion.Tools) plan.Step {
 				return env.Interactive(ctx, req)
 			}
 			_, err := env.Run(ctx, req)
+			if err != nil && tool == companion.Herdr {
+				// herdr asks before installing itself on the machine and
+				// refuses without a terminal; never answer for the user.
+				return plan.WithFix(err, "run `lazylongarm companion remotes "+t.Name+" --tool herdr` in a terminal to approve herdr's install")
+			}
 			return err
 		},
 		Verify: func(ctx context.Context, env *plan.Env) error {

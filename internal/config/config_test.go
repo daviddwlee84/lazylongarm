@@ -82,3 +82,19 @@ func TestEmptyCompanionsAreNotWritten(t *testing.T) {
 		t.Fatalf("empty companions table written:\n%s", data)
 	}
 }
+
+func TestPresetsDecodeTypedValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	data := "[companions.dotfiles]\nanswers = \"server\"\n[companions.dotfiles.presets.server]\nprofile = \"ubuntu_server\"\ninstallTailscale = true\njobs = 4\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Companions.Dotfiles.Presets["server"]
+	if c.Companions.Dotfiles.Answers != "server" || p["profile"] != "ubuntu_server" || p["installTailscale"] != true || p["jobs"] != int64(4) {
+		t.Fatalf("%#v", c.Companions.Dotfiles)
+	}
+}

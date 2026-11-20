@@ -7,6 +7,13 @@
   chezmoi install + `init --apply`, or your own bootstrap command template with
   `{bundle}` and friends), and show both per machine. Personal values live in
   `[companions.dotfiles]`; nothing already set up is replaced.
+- `companion dotfiles --answers ask|defaults|<preset>`: chezmoi's first-init
+  questions are asked in your terminal by default; presets in
+  `[companions.dotfiles.presets]` pre-answer them (a preset named like the
+  bundle is picked automatically); `--promptDefaults` only on request.
+- Worker labels (from the hub) in the dashboard's Details and `worker ls`.
+- Docs site: <https://daviddwlee84.github.io/lazylongarm/>, with a "Why
+  lazylongarm" page.
 - Dashboard Fleet tab: `R` registers the selected machine in hc/herdr, `D` sets
   up its dotfiles.
 - The host probe also reports `git` and `chezmoi`; rerunning `worker add` keeps
