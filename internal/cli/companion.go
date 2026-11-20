@@ -113,9 +113,9 @@ func (o *options) pickTargets(cmd *cobra.Command, args []string, all bool, title
 }
 
 // remoteLists reads hc/herdr machine lists; a tool that is not installed is
-// absent from the map.
-func (o *options) remoteLists(ctx context.Context, tools []string) (map[string][]companion.Remote, error) {
-	lists := map[string][]companion.Remote{}
+// absent from the map, and a tool whose list cannot be read is in errs.
+func (o *options) remoteLists(ctx context.Context, tools []string) (map[string][]companion.Remote, map[string]error) {
+	lists, errs := map[string][]companion.Remote{}, map[string]error{}
 	for _, tool := range tools {
 		if !o.deps.Companion.Available(tool) {
 			continue
@@ -124,11 +124,12 @@ func (o *options) remoteLists(ctx context.Context, tools []string) (map[string][
 		list, err := o.deps.Companion.List(lctx, tool)
 		cancel()
 		if err != nil {
-			return nil, err
+			errs[tool] = err
+			continue
 		}
 		lists[tool] = list
 	}
-	return lists, nil
+	return lists, errs
 }
 
 func validTools(tools []string) ([]string, error) {
@@ -173,10 +174,7 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 			if err := o.load(); err != nil {
 				return err
 			}
-			lists, err := o.remoteLists(cmd.Context(), companion.RemoteTools)
-			if err != nil {
-				return err
-			}
+			lists, listErrs := o.remoteLists(cmd.Context(), companion.RemoteTools)
 			targets := o.remoteTargets()
 			rows := make([]companionRow, len(targets))
 			for i, t := range targets {
@@ -184,6 +182,8 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 				for _, tool := range companion.RemoteTools {
 					list, ok := lists[tool]
 					switch r, found := companion.Find(list, t.SSHHost, t.Name); {
+					case listErrs[tool] != nil:
+						rows[i].Remotes[tool] = "error"
 					case !ok:
 						rows[i].Remotes[tool] = "not installed"
 					case found:
@@ -205,8 +205,21 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 				}
 				wg.Wait()
 			}
+			errText := map[string]string{}
+			for tool, err := range listErrs {
+				errText[tool] = firstLine(err.Error())
+			}
 			if o.json {
-				return writeJSON(cmd.OutOrStdout(), map[string]any{"machines": rows})
+				rep := map[string]any{"machines": rows}
+				if len(errText) > 0 {
+					rep["errors"] = errText
+				}
+				return writeJSON(cmd.OutOrStdout(), rep)
+			}
+			for _, tool := range companion.RemoteTools {
+				if e, ok := errText[tool]; ok {
+					fmt.Fprintf(cmd.ErrOrStderr(), "! %s machine list unavailable: %s\n", tool, e)
+				}
 			}
 			out := cmd.OutOrStdout()
 			if len(rows) == 0 {
@@ -300,9 +313,11 @@ registered are left alone, so reruns are safe.`,
 			if err != nil {
 				return err
 			}
-			lists, err := o.remoteLists(cmd.Context(), tools)
-			if err != nil {
-				return err
+			lists, listErrs := o.remoteLists(cmd.Context(), tools)
+			for _, tool := range tools {
+				if err := listErrs[tool]; err != nil {
+					return fmt.Errorf("%s: %w", tool, err)
+				}
 			}
 			unregistered := func(t config.Target) bool {
 				for _, list := range lists {
@@ -358,10 +373,10 @@ registered are left alone, so reruns are safe.`,
 // ---- companion dotfiles ----
 
 type dotfilesFlags struct {
-	all                    bool
-	repo, bundle, template string
-	update                 bool
-	apply                  applyOptions
+	all                             bool
+	repo, bundle, template, answers string
+	update                          bool
+	apply                           applyOptions
 }
 
 func companionDotfilesCommand(o *options) *cobra.Command {
@@ -370,12 +385,21 @@ func companionDotfilesCommand(o *options) *cobra.Command {
 		Use:   "dotfiles [machine...]",
 		Short: "Bootstrap (or update) chezmoi dotfiles on fleet machines",
 		Long: `Without a bootstrap template it installs chezmoi into ~/.local/bin when missing
-and runs ` + "`chezmoi init --apply --promptDefaults <repo>`" + `. With a template (config
+and runs ` + "`chezmoi init --apply <repo>`" + `, answering chezmoi's prompts by --answers:
+
+  ask       chezmoi asks each prompt in your terminal (default)
+  <preset>  [companions.dotfiles.presets.<preset>] pre-answers prompts, keyed by
+            the question text (not the variable name); the rest are asked
+            (or take their defaults when there is no terminal)
+  defaults  every prompt takes its default (--promptDefaults)
+
+A preset named like the machine's bundle is used automatically. With a template (config
 [companions.dotfiles] bootstrap, or --bootstrap) it runs your own command instead,
 for example a dotfiles bootstrap script that takes a bundle:
 
   curl -fsSL https://raw.githubusercontent.com/you/dotfiles/main/bootstrap.sh | bash -s -- --yes --bundle {bundle}
 
+(drop --yes to get that script's own interactive setup in your terminal).
 Placeholders {repo} {bundle} {name} {os} {arch} {distro} become shell-quoted
 values. The bundle comes from --bundle, the target's recorded bundle,
 bundle_by_os for the probed OS, then default_bundle.
@@ -445,6 +469,7 @@ one with dotfiles from another repository is refused, never replaced.`,
 	fl.StringVar(&f.bundle, "bundle", "", "bundle for {bundle} in the bootstrap template (recorded on the target)")
 	fl.StringVar(&f.template, "bootstrap", "", "bootstrap command template (default: config [companions.dotfiles] bootstrap, else built-in chezmoi)")
 	fl.BoolVar(&f.update, "update", false, "pull and apply on machines that already have dotfiles")
+	fl.StringVar(&f.answers, "answers", "", "how chezmoi's prompts are answered: ask (in the terminal), defaults, or a preset name (default: config answers, a preset named like the bundle, else ask)")
 	f.apply.bind(c)
 	return c
 }
@@ -503,8 +528,14 @@ func (o *options) buildDotfiles(cmd *cobra.Command, t config.Target, f *dotfiles
 	cfg := o.cfg.Companions.Dotfiles
 	req := flows.DotfilesRequest{
 		Host: t.SSHHost, Name: t.Name, Repo: f.repo, Bootstrap: f.template, Update: f.update,
-		Bundle: companion.Bundle(f.bundle, t.DotfilesBundle, cfg.BundleByOS, facts.OS, cfg.DefaultBundle),
+		Bundle:      companion.Bundle(f.bundle, t.DotfilesBundle, cfg.BundleByOS, facts.OS, cfg.DefaultBundle),
+		Interactive: o.interactive(cmd),
 	}
+	answers, err := companion.ResolveAnswers(f.answers, cfg.Answers, req.Bundle, cfg.Presets)
+	if err != nil {
+		return nil, usage("%v", err)
+	}
+	req.Answers = answers
 	p, err := flows.BuildCompanionDotfiles(req, facts, state, flows.DotfilesDeps{Config: o.cfg})
 	if err != nil {
 		return nil, usage("%s: %v", t.Name, err)

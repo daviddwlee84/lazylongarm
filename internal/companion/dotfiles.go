@@ -199,32 +199,174 @@ func Render(tmpl string, values map[string]string) (string, error) {
 	return b.String(), nil
 }
 
-// DefaultBootstrap installs chezmoi when missing (into ~/.local/bin) and
-// initializes and applies repo, answering prompts with their defaults.
-const DefaultBootstrap = `set -e
+// Answer modes for chezmoi's prompts with the built-in bootstrap.
+const (
+	AnswersAsk      = "ask"      // chezmoi asks each prompt in the terminal
+	AnswersDefaults = "defaults" // --promptDefaults: every prompt takes its default
+)
+
+// Answers is how the built-in bootstrap answers chezmoi's prompts.
+type Answers struct {
+	Mode   string   // AnswersAsk, AnswersDefaults or "preset"
+	Preset string   // preset name when Mode is "preset"
+	Flags  []string // chezmoi init flags that pre-answer prompts
+	Count  int      // number of pre-answered prompts
+}
+
+// Label describes the answers for Review.
+func (a Answers) Label() string {
+	switch a.Mode {
+	case AnswersAsk:
+		return "ask: chezmoi prompts in your terminal"
+	case AnswersDefaults:
+		return "defaults: every prompt takes its default (--promptDefaults)"
+	}
+	return fmt.Sprintf("preset %q (%d answers); other prompts are asked", a.Preset, a.Count)
+}
+
+// ResolveAnswers picks the answer mode: the flag, then the config, then a
+// preset named like the machine's bundle, then ask.
+func ResolveAnswers(flag, configured, bundle string, presets map[string]map[string]any) (Answers, error) {
+	choice := strings.TrimSpace(flag)
+	if choice == "" {
+		choice = strings.TrimSpace(configured)
+	}
+	if choice == "" {
+		if _, ok := presets[bundle]; ok && bundle != "" {
+			choice = bundle
+		} else {
+			choice = AnswersAsk
+		}
+	}
+	switch choice {
+	case AnswersAsk, AnswersDefaults:
+		return Answers{Mode: choice}, nil
+	}
+	preset, ok := presets[choice]
+	if !ok {
+		names := make([]string, 0, len(presets))
+		for n := range presets {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		have := "none configured"
+		if len(names) > 0 {
+			have = "configured: " + strings.Join(names, ", ")
+		}
+		return Answers{}, fmt.Errorf("answers %q is not ask, defaults or a preset in [companions.dotfiles.presets] (%s)", choice, have)
+	}
+	flags, err := PromptFlags(preset)
+	if err != nil {
+		return Answers{}, fmt.Errorf("preset %q: %w", choice, err)
+	}
+	return Answers{Mode: "preset", Preset: choice, Flags: flags, Count: len(preset)}, nil
+}
+
+// PromptFlags turns preset answers into chezmoi init flags: booleans become
+// --promptBool, integers --promptInt and strings both --promptString and
+// --promptChoice (a choice prompt reads the latter). chezmoi matches these by
+// the prompt text (the question shown to the user, e.g. "Machine profile"),
+// not by the data key. Keys are sorted so the plan digest is stable.
+func PromptFlags(preset map[string]any) ([]string, error) {
+	keys := make([]string, 0, len(preset))
+	for k := range preset {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out, problems []string
+	for _, k := range keys {
+		if strings.ContainsAny(k, "=,") || strings.TrimSpace(k) == "" {
+			problems = append(problems, fmt.Sprintf("bad key %q", k))
+			continue
+		}
+		switch v := preset[k].(type) {
+		case bool:
+			out = append(out, "--promptBool", fmt.Sprintf("%s=%t", k, v))
+		case int64:
+			out = append(out, "--promptInt", fmt.Sprintf("%s=%d", k, v))
+		case int:
+			out = append(out, "--promptInt", fmt.Sprintf("%s=%d", k, v))
+		case string:
+			if strings.Contains(v, ",") {
+				problems = append(problems, fmt.Sprintf("%s: commas are not supported in values", k))
+				continue
+			}
+			out = append(out, "--promptString", k+"="+v, "--promptChoice", k+"="+v)
+		default:
+			problems = append(problems, fmt.Sprintf("%s: only strings, integers and booleans are supported (got %T)", k, v))
+		}
+	}
+	if len(problems) > 0 {
+		return nil, errors.New(strings.Join(problems, "; "))
+	}
+	return out, nil
+}
+
+// InitFlags are the chezmoi init flags for a; without a terminal, prompts
+// that are not pre-answered take their defaults.
+func (a Answers) InitFlags(interactive bool) []string {
+	flags := append([]string{}, a.Flags...)
+	if a.Mode == AnswersDefaults || !interactive {
+		flags = append(flags, "--promptDefaults")
+	}
+	return flags
+}
+
+// installChezmoi installs chezmoi into ~/.local/bin when it is missing and
+// leaves its path in $cz.
+const installChezmoi = `set -e
 if command -v chezmoi >/dev/null 2>&1; then
   cz=chezmoi
 else
   if command -v curl >/dev/null 2>&1; then installer=$(curl -fsLS https://get.chezmoi.io); else installer=$(wget -qO- https://get.chezmoi.io); fi
   sh -c "$installer" -- -b "$HOME/.local/bin"
   cz="$HOME/.local/bin/chezmoi"
-fi
-"$cz" init --apply --promptDefaults {repo}`
+fi`
 
-// UpdateScript pulls and applies the existing source, answering new prompts
-// with their defaults.
-const UpdateScript = `set -e
-chezmoi update --init --promptDefaults`
+// InitCommand is the chezmoi init line the built-in bootstrap runs.
+func InitCommand(repo string, flags []string) string {
+	parts := []string{"chezmoi init --apply"}
+	for _, f := range flags {
+		parts = append(parts, quoteArg(f))
+	}
+	return strings.Join(append(parts, connection.ShellQuote(repo)), " ")
+}
+
+func quoteArg(s string) string {
+	if strings.HasPrefix(s, "--") && !strings.ContainsAny(s, " '\"$`\\") {
+		return s
+	}
+	return connection.ShellQuote(s)
+}
+
+// UpdateCommand pulls and applies the existing source; new prompts are asked
+// in a terminal unless defaults are requested.
+func UpdateCommand(defaults bool) string {
+	if defaults {
+		return "chezmoi update --init --promptDefaults"
+	}
+	return "chezmoi update --init"
+}
 
 // BootstrapScript is the full script run on the machine: the PATH preamble
-// plus the rendered template (or DefaultBootstrap).
-func BootstrapScript(tmpl string, values map[string]string) (string, error) {
-	if strings.TrimSpace(tmpl) == "" {
-		tmpl = DefaultBootstrap
+// plus the rendered template, or the built-in chezmoi install + init with
+// initFlags (templates ignore initFlags; they answer prompts themselves).
+func BootstrapScript(tmpl string, values map[string]string, initFlags []string) (string, error) {
+	if strings.TrimSpace(tmpl) != "" {
+		body, err := Render(tmpl, values)
+		if err != nil {
+			return "", err
+		}
+		return RemotePath + "\n" + body + "\n", nil
 	}
-	body, err := Render(tmpl, values)
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(values["repo"]) == "" {
+		return "", errors.New("{repo} is used but has no value")
 	}
-	return RemotePath + "\n" + body + "\n", nil
+	line := strings.Replace(InitCommand(values["repo"], initFlags), "chezmoi ", `"$cz" `, 1)
+	return RemotePath + "\n" + installChezmoi + "\n" + line + "\n", nil
+}
+
+// UpdateScript is the full update script.
+func UpdateScript(defaults bool) string {
+	return RemotePath + "\nset -e\n" + UpdateCommand(defaults) + "\n"
 }

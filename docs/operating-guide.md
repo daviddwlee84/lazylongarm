@@ -101,23 +101,48 @@ files. Your personal values go in the config:
 ```toml
 [companions.dotfiles]
 repo = "https://github.com/you/dotfiles.git"   # URL, "user" or "user/repo"
-# Optional: your own bootstrap instead of the built-in
-#   chezmoi install (get.chezmoi.io → ~/.local/bin) + chezmoi init --apply --promptDefaults <repo>
-bootstrap = "curl -fsSL https://raw.githubusercontent.com/you/dotfiles/main/bootstrap.sh | bash -s -- --yes --bundle {bundle}"
+answers = "ask"                                # ask | defaults | <preset> (see below)
 default_bundle = "server"
 
 [companions.dotfiles.bundle_by_os]
 darwin = "laptop"
 linux = "server"
+
+# Pre-answers for chezmoi's prompt*Once questions. Keys are the question texts
+# from your .chezmoi.toml.tmpl, e.g. promptChoiceOnce . "profile" "Machine profile" …
+[companions.dotfiles.presets.server]
+"Machine profile" = "ubuntu_server"
+"Install Tailscale" = true
+
+# Optional: your own bootstrap instead of the built-in chezmoi install + init
+# bootstrap = "curl -fsSL https://raw.githubusercontent.com/you/dotfiles/main/bootstrap.sh | bash -s -- --yes --bundle {bundle}"
 ```
 
-Placeholders in `bootstrap`: `{repo}` `{bundle}` `{name}` `{os}` `{arch}`
-`{distro}`, replaced by shell-quoted values (`${VAR}` is left to the shell). An
-unknown placeholder, or one used without a value, stops the plan. The bundle is
-`--bundle`, else the target's `dotfiles_bundle`, else `bundle_by_os[<os>]`,
-else `default_bundle`. Without a bootstrap template, prompts are answered with
-their defaults; put the bundle logic in your dotfiles' own bootstrap script
-when you need per-machine answers.
+### Answering chezmoi's prompts
+
+A dotfiles repository usually asks questions on first init (profile, which tools
+to install, …). chezmoi stores the answers on the machine and never asks
+`prompt*Once` questions again, so a wrong answer sticks. The built-in bootstrap
+(`chezmoi init --apply <repo>`) answers them by `--answers` (or `answers` in the
+config):
+
+| Mode | What happens |
+|---|---|
+| `ask` (default) | chezmoi asks each question in your terminal, exactly as a manual `chezmoi init` would. Needs a terminal; without one the plan stops instead of guessing |
+| `<preset>` | `[companions.dotfiles.presets.<preset>]` pre-answers questions (`--promptString`/`--promptChoice` for strings, `--promptBool`, `--promptInt`). chezmoi matches them by **question text**, not by variable name: for `promptChoiceOnce . "profile" "Machine profile" …` the key is `"Machine profile"`. Commas and `=` cannot appear in keys or values. The rest are asked in the terminal, or take their defaults when there is none. A preset named like the machine's bundle is picked automatically, so `bundle_by_os` selects presets per OS |
+| `defaults` | every question takes the template's default (`--promptDefaults`). Only when you ask for it |
+
+With `--update`, new questions are asked in a terminal (defaults without one).
+
+### Your own bootstrap
+
+`bootstrap` replaces the built-in install + init with your command; it then
+answers the questions itself. Placeholders `{repo}` `{bundle}` `{name}` `{os}`
+`{arch}` `{distro}` become shell-quoted values (`${VAR}` is left to the shell);
+an unknown placeholder, or one used without a value, stops the plan. The bundle
+is `--bundle`, else the target's `dotfiles_bundle`, else `bundle_by_os[<os>]`,
+else `default_bundle`. Leave a non-interactive flag such as `--yes` out of the
+template to get your script's own interactive setup in the terminal.
 
 ## Hub VM (Azure)
 

@@ -5,6 +5,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,6 +34,25 @@ type Row struct {
 	Jobs     int     `json:"jobs_active"`
 	Owner    string  `json:"owner,omitempty"`
 	LastSeen string  `json:"last_seen,omitempty"`
+	// Labels from the hub registry (worker add --label, plus os/arch).
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// LabelText is the labels as sorted k=v pairs, without os/arch (shown as the
+// platform already).
+func (r Row) LabelText() string {
+	keys := make([]string, 0, len(r.Labels))
+	for k := range r.Labels {
+		if k != "os" && k != "arch" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + r.Labels[k]
+	}
+	return strings.Join(parts, " ")
 }
 
 // Merge combines the hub registry with lazylongarm-managed targets.
@@ -47,7 +67,7 @@ func Merge(cfg *config.Config, nodes []longarm.Node) []Row {
 		if state == "approved" {
 			state = map[bool]string{true: "online", false: "offline"}[n.Online]
 		}
-		r := &Row{Name: n.Name, InHub: true, Online: n.Online, State: state, Platform: n.OS + "/" + n.Arch, Version: n.Version, Path: n.Path(), Jobs: n.JobsActive, Owner: n.Owner, LastSeen: n.LastSeen}
+		r := &Row{Name: n.Name, InHub: true, Online: n.Online, State: state, Platform: n.OS + "/" + n.Arch, Version: n.Version, Path: n.Path(), Jobs: n.JobsActive, Owner: n.Owner, LastSeen: n.LastSeen, Labels: n.Labels}
 		if n.Metrics != nil {
 			r.CPU, r.Mem = n.Metrics.CPUPercent, n.MemPercent()
 		}

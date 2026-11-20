@@ -20,9 +20,14 @@ type DotfilesRequest struct {
 	Host      string // SSH alias, "" = this machine
 	Name      string // display name (the target's name)
 	Repo      string
-	Bootstrap string // template; "" = companion.DefaultBootstrap
+	Bootstrap string // template; "" = the built-in chezmoi install + init
 	Bundle    string
 	Update    bool // run `chezmoi update` when already initialized
+	// Answers says how the built-in bootstrap answers chezmoi's prompts
+	// (zero value = ask). Templates answer prompts themselves.
+	Answers companion.Answers
+	// Interactive: the apply will run attached to a terminal.
+	Interactive bool
 }
 
 // DotfilesDeps: the config to record the result in, and the state reader
@@ -77,7 +82,14 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 	if fresh && !f.Has["git"] {
 		problems = append(problems, f.Where()+" has no git (chezmoi needs it to clone the repository)")
 	}
-	body, err := companion.BootstrapScript(req.Bootstrap, values)
+	if req.Answers.Mode == "" {
+		req.Answers.Mode = companion.AnswersAsk
+	}
+	initFlags := req.Answers.InitFlags(req.Interactive)
+	if fresh && !custom && req.Answers.Mode == companion.AnswersAsk && !req.Interactive {
+		problems = append(problems, "answers=ask needs a terminal for chezmoi's prompts: run it in a terminal, or pass --answers defaults or a preset")
+	}
+	body, err := companion.BootstrapScript(req.Bootstrap, values, initFlags)
 	if err != nil && (custom || (fresh && req.Repo != "")) {
 		problems = append(problems, "bootstrap template: "+err.Error())
 	}
@@ -91,7 +103,7 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 		return nil, errors.New(strings.Join(problems, "; "))
 	}
 
-	method := "built-in: install chezmoi if missing, then chezmoi init --apply --promptDefaults"
+	method := "built-in: install chezmoi if missing, then chezmoi init --apply"
 	switch {
 	case !fresh && req.Update:
 		method = "chezmoi update of the existing source"
@@ -116,20 +128,25 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 			{"repository", dash(req.Repo)},
 			{"bundle", dash(req.Bundle)},
 			{"method", method},
+			{"answers", answersLabel(req, custom, fresh)},
 			{"current", state},
 		},
 	}
 	update := current.Initialized() && req.Update
+	updateDefaults := req.Answers.Mode == companion.AnswersDefaults || !req.Interactive
 	title, display := "Bootstrap dotfiles", ""
 	switch {
 	case update:
-		title, display = "Update dotfiles (chezmoi update)", strings.TrimPrefix(companion.UpdateScript, "set -e\n")
+		title, display = "Update dotfiles (chezmoi update)", companion.UpdateCommand(updateDefaults)
 	case !fresh:
 		display = "nothing (already set up; --update pulls and applies)"
 	case custom:
 		display = strings.TrimSpace(strings.TrimPrefix(body, companion.RemotePath+"\n"))
 	default:
-		display = "install chezmoi into ~/.local/bin when missing (get.chezmoi.io)\nchezmoi init --apply --promptDefaults " + connection.ShellQuote(req.Repo)
+		display = "install chezmoi into ~/.local/bin when missing (get.chezmoi.io)\n" + companion.InitCommand(req.Repo, initFlags)
+	}
+	if fresh && !custom && req.Answers.Mode == "preset" && !req.Interactive {
+		p.Warnings = append(p.Warnings, "no terminal: prompts the preset does not answer take their defaults")
 	}
 	if current.Initialized() && !update {
 		p.Warnings = append(p.Warnings, "dotfiles are already set up on "+f.Where()+"; pass --update to pull and apply the latest")
@@ -159,7 +176,7 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 			}
 			script := body
 			if s.Initialized() {
-				script = companion.RemotePath + "\n" + companion.UpdateScript + "\n"
+				script = companion.UpdateScript(updateDefaults)
 			} else if script == "" {
 				return fmt.Errorf("dotfiles are no longer set up on %s and no repository or bootstrap template is configured", f.Where())
 			}
@@ -216,6 +233,20 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 		},
 	})
 	return p, nil
+}
+
+func answersLabel(req DotfilesRequest, custom, fresh bool) string {
+	switch {
+	case custom:
+		return "the bootstrap template answers them"
+	case !fresh && req.Update && (req.Answers.Mode == companion.AnswersDefaults || !req.Interactive):
+		return "new prompts take their defaults"
+	case !fresh && req.Update:
+		return "new prompts are asked in your terminal"
+	case !fresh:
+		return "-"
+	}
+	return req.Answers.Label()
 }
 
 func dash(s string) string {

@@ -25,7 +25,7 @@ plan.
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
 | hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
 | Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
-| Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--update] --dry-run --json` |
+| Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--answers defaults\|<preset>] [--update] --dry-run --json` (default `ask` needs the user's terminal) |
 | Effective config and paths | `lazylongarm settings show` |
 
 Errors are a JSON envelope on stderr: `{"error":{"code","message","fix"?,"step"?}}`.

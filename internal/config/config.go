@@ -106,6 +106,14 @@ type Dotfiles struct {
 	DefaultBundle string `toml:"default_bundle,omitempty"`
 	// BundleByOS maps a probed OS ("linux", "darwin") to a bundle.
 	BundleByOS map[string]string `toml:"bundle_by_os,omitempty"`
+	// Answers is how the built-in bootstrap answers chezmoi's prompts:
+	// "ask" (in the terminal), "defaults", or a preset name. Empty = a
+	// preset named like the machine's bundle, else ask.
+	Answers string `toml:"answers,omitempty"`
+	// Presets pre-answer chezmoi prompts: preset name → prompt text (the
+	// question as the template's prompt*Once call words it, not the data
+	// key) → value (string, integer or boolean).
+	Presets map[string]map[string]any `toml:"presets,omitempty"`
 }
 
 // TUI preferences.

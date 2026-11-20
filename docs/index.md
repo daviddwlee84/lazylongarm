@@ -5,6 +5,7 @@ authority; these pages explain behavior and decisions.
 
 | Read when… | Page |
 |---|---|
+| Deciding whether you need it on top of the `longarm` CLI | [Why lazylongarm](why.md) |
 | Running or repairing `hub setup` / `worker add`, understanding a step, recovering from a failed run | [Operating guide](operating-guide.md) |
 | Changing code: package layout, plan engine, SSH model, Longarm contract | [Design](design.md) |
 | Learning how the certificates, mTLS, join codes, TOTP and SSH trust fit together | [Learning notes: crypto and identity](learn/auth-and-crypto.md) |

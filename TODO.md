@@ -43,6 +43,11 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
 - **Companion tab in the dashboard (P3, M)**: the `companion status` matrix
   (hc / herdr / dotfiles per machine) with the `R`/`D` actions and a bulk
   "register all missing".
+- **Dotfiles prompt wizard (P4, M)**: read the `prompt*Once` calls from the
+  repository's `.chezmoi.toml.tmpl` and offer them as a form that writes a
+  preset; `ask` mode (chezmoi's own prompts) covers this today. It would also
+  catch preset keys written as variable names instead of question texts
+  (chezmoi silently ignores those).
 - **Companions on workers, not just here (P3, M)**: register fleet machines in
   hc/herdr *on* a worker (mesh), e.g. `companion remotes --on <machine>`.
 - **HTTPS bridge for Anthropic-hosted Claude sessions (P3, L)**: remote MCP

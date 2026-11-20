@@ -141,16 +141,62 @@ func TestRenderQuotesAndRejectsTypos(t *testing.T) {
 }
 
 func TestDefaultBootstrapScript(t *testing.T) {
-	s, err := BootstrapScript("", map[string]string{"repo": "https://github.com/you/dotfiles.git"})
+	s, err := BootstrapScript("", map[string]string{"repo": "https://github.com/you/dotfiles.git"}, []string{"--promptDefaults"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{RemotePath, "get.chezmoi.io", "init --apply --promptDefaults 'https://github.com/you/dotfiles.git'"} {
+	for _, want := range []string{RemotePath, "get.chezmoi.io", `"$cz" init --apply --promptDefaults 'https://github.com/you/dotfiles.git'`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("default script lacks %q:\n%s", want, s)
 		}
 	}
-	if _, err := BootstrapScript("", nil); err == nil {
+	if _, err := BootstrapScript("", nil, nil); err == nil {
 		t.Fatal("default bootstrap without repo accepted")
+	}
+	tmpl, err := BootstrapScript("run {bundle}", map[string]string{"bundle": "b"}, []string{"--promptDefaults"})
+	if err != nil || strings.Contains(tmpl, "promptDefaults") {
+		t.Fatalf("template must ignore init flags: %v %s", err, tmpl)
+	}
+}
+
+func TestResolveAnswers(t *testing.T) {
+	presets := map[string]map[string]any{
+		"server": {"profile": "ubuntu_server", "installTailscale": true, "jobs": int64(4)},
+		"bad":    {"list": []any{"a"}},
+	}
+	cases := []struct{ flag, cfg, bundle, mode, preset string }{
+		{"", "", "", AnswersAsk, ""},
+		{"", "", "server", "preset", "server"}, // preset named like the bundle
+		{"", "defaults", "server", AnswersDefaults, ""},
+		{"ask", "defaults", "server", AnswersAsk, ""},
+		{"server", "", "", "preset", "server"},
+	}
+	for _, c := range cases {
+		a, err := ResolveAnswers(c.flag, c.cfg, c.bundle, presets)
+		if err != nil || a.Mode != c.mode || a.Preset != c.preset {
+			t.Errorf("%+v: %v %+v", c, err, a)
+		}
+	}
+	a, _ := ResolveAnswers("server", "", "", presets)
+	if got := strings.Join(a.Flags, " "); got != "--promptBool installTailscale=true --promptInt jobs=4 --promptString profile=ubuntu_server --promptChoice profile=ubuntu_server" {
+		t.Errorf("flags (sorted by key) %q", got)
+	}
+	if got := strings.Join(a.InitFlags(false), " "); !strings.HasSuffix(got, "--promptDefaults") {
+		t.Errorf("no terminal must fall back to defaults: %q", got)
+	}
+	if got := strings.Join(a.InitFlags(true), " "); strings.Contains(got, "promptDefaults") {
+		t.Errorf("terminal must ask the rest: %q", got)
+	}
+	if _, err := ResolveAnswers("nope", "", "", presets); err == nil || !strings.Contains(err.Error(), "configured: bad, server") {
+		t.Errorf("unknown preset: %v", err)
+	}
+	if _, err := ResolveAnswers("bad", "", "", presets); err == nil || !strings.Contains(err.Error(), "only strings") {
+		t.Errorf("list value: %v", err)
+	}
+	if _, err := PromptFlags(map[string]any{"x": "a,b"}); err == nil {
+		t.Error("comma accepted")
+	}
+	if got := InitCommand("you", []string{"--promptString", "name=Jane Doe"}); got != "chezmoi init --apply --promptString 'name=Jane Doe' 'you'" {
+		t.Errorf("init command %q", got)
 	}
 }

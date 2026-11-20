@@ -29,3 +29,13 @@ func TestMergeKeepsManagedTargetsMissingFromHub(t *testing.T) {
 		t.Fatalf("%+v", rows)
 	}
 }
+
+func TestRowLabelTextSkipsPlatform(t *testing.T) {
+	r := Row{Labels: map[string]string{"os": "linux", "arch": "amd64", "pool": "home", "gpu": "3090"}}
+	if got := r.LabelText(); got != "gpu=3090 pool=home" {
+		t.Fatalf("%q", got)
+	}
+	if (Row{}).LabelText() != "" {
+		t.Fatal("empty labels")
+	}
+}
