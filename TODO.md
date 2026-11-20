@@ -45,8 +45,23 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   "register all missing".
 - **Companions on workers, not just here (P3, M)**: register fleet machines in
   hc/herdr *on* a worker (mesh), e.g. `companion remotes --on <machine>`.
+- **Privileged steps on workers (P3, M)**: jobs run as the longarmd service
+  account without a TTY, so `sudo` fails and Longarm never elevates (Windows
+  has upstream admin workers; Linux/macOS have nothing). Offer a helper that
+  tries `sudo -n` through `longarm exec` and falls back to an attach session
+  where the human types the password (the handoff the setup flows already do
+  over SSH), and an opt-in `worker add` step that writes a reviewed sudoers
+  allowlist for the service account. Never pipe a password to an agent.
+- **Warn about root-equivalent service accounts (P3, S)**: the `worker add`
+  probe should flag a service account in the `docker` group or with
+  `NOPASSWD: ALL` sudo: with shared isolation every job on that worker gets
+  root without a password.
 - **HTTPS bridge for Anthropic-hosted Claude sessions (P3, L)**: remote MCP
   connector in front of the hub. → [backlog](backlog/https-bridge.md)
+- **Authenticated MCP gateway on a trusted LAN (P4, M)**: `longarm mcp` behind
+  TLS + auth with a narrowed tool set and its own non-admin identity, for
+  agents that should not hold a client certificate (devcontainers, CI,
+  throwaway VMs). → [backlog](backlog/https-bridge.md#lan-variant)
 - **Config comment preservation (P3, S)**: the config is app-written today;
   copy lazyclash `preserve.go` if users start hand-editing it.
 - **Mouse support in the dashboard (P4, S)**: pure layout → hit map, as in lazyclash.
@@ -56,5 +71,8 @@ Upstream issues worth filing (Longarm): `longarm skill print [reference]` /
 binary; low priority since copies already auto-refresh per release);
 `longarmd join --code-stdin`;
 `speedtest` missing from `cliFeatures`; `.deb` asset names differ from the docs
-(`longarm-linux-amd64.deb` vs `longarm_<v>_<arch>.deb`). Already filed: #159
-(web previews), #160 (XDG).
+(`longarm-linux-amd64.deb` vs `longarm_<v>_<arch>.deb`); the built-in sshd
+(`longarm ssh`) sets neither `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY` nor
+`LONGARM_WORKER`, so shell prompts (Starship's hostname module) look local.
+Already filed: #159 (web previews), #160 (XDG), #161 (worker completion for
+`ssh`, `desktop`, `speedtest`, `cp`, `agent-sessions`, `handoff`).
