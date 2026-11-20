@@ -37,8 +37,14 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   open in browser; Web preview if upstream #159 lands.
 - **Non-apt hub hosts (P3, M)**: bare `longarm-hub-linux-*` + the upstream
   unit; dnf repo for Fedora/RHEL.
-- **Import hosts from dev-cli fleet (P3, S)**: read `dev fleet config show` /
-  `remotes.toml` + `remotes.d/` as picker suggestions; never copy its schema.
+- **Import hosts from other inventories (P3, S)**: read `dev fleet config show` /
+  `remotes.toml` + `remotes.d/`, hc/herdr machine lists, and a dotfiles fleet
+  inventory as picker suggestions; never copy their schemas.
+- **Companion tab in the dashboard (P3, M)**: the `companion status` matrix
+  (hc / herdr / dotfiles per machine) with the `R`/`D` actions and a bulk
+  "register all missing".
+- **Companions on workers, not just here (P3, M)**: register fleet machines in
+  hc/herdr *on* a worker (mesh), e.g. `companion remotes --on <machine>`.
 - **HTTPS bridge for Anthropic-hosted Claude sessions (P3, L)**: remote MCP
   connector in front of the hub. → [backlog](backlog/https-bridge.md)
 - **Config comment preservation (P3, S)**: the config is app-written today;

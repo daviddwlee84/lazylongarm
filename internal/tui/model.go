@@ -758,6 +758,12 @@ func (m *Model) actions() []action {
 			action{"add", "add worker", []string{"a"}, hasHub && !m.toolBusy, func() tea.Cmd { return m.runTool("Add worker", "worker", "add") }},
 			action{"try", "try uname", []string{"x", "enter"}, ok && row.Online, func() tea.Cmd { return m.tryWorker(row.Name) }},
 			action{"ssh", "longarm ssh", []string{"s"}, ok && row.InHub && !m.toolBusy, func() tea.Cmd { return m.runProcess("longarm ssh "+row.Name, "ssh", row.Name) }},
+			action{"remotes", "hc/herdr remote", []string{"R"}, ok && row.SSHHost != "" && !m.toolBusy, func() tea.Cmd {
+				return m.runTool("Register "+row.Name+" in hc/herdr", "companion", "remotes", row.Name)
+			}},
+			action{"dotfiles", "dotfiles", []string{"D"}, ok && row.SSHHost != "" && !m.toolBusy, func() tea.Cmd {
+				return m.runTool("Dotfiles on "+row.Name, "companion", "dotfiles", row.Name)
+			}},
 		)
 	case tabJobs:
 		j, ok := m.selectedJob()

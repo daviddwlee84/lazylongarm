@@ -118,3 +118,31 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 func viewText(m *Model) string { return m.View().Content }
+
+func TestFleetCompanionActions(t *testing.T) {
+	cfg := &config.Config{Hubs: []config.Hub{{ID: "hub-1", Mode: "public", Address: "hub.example.com:7443"}}, DefaultHub: "hub-1",
+		Targets: []config.Target{{ID: "a", Name: "a", SSHHost: "worker-a", Hub: "hub-1", WorkerName: "a"}}}
+	m := New(Options{Config: cfg})
+	m.width, m.height = 120, 30
+	m.refreshGen = 1
+	m.Update(refreshMsg{gen: 1, nodes: nodes("a", "b")})
+	enabled := func() map[string]bool {
+		out := map[string]bool{}
+		for _, a := range m.actions() {
+			out[a.id] = a.enabled
+		}
+		return out
+	}
+	m.selected[tabFleet] = "a"
+	if e := enabled(); !e["remotes"] || !e["dotfiles"] {
+		t.Fatalf("managed row: %v", e)
+	}
+	m.selected[tabFleet] = "b" // in the hub only: no SSH host to reach it
+	if e := enabled(); e["remotes"] || e["dotfiles"] {
+		t.Fatalf("unmanaged row: %v", e)
+	}
+	m.Update(key("?"))
+	if !strings.Contains(viewText(m), "hc/herdr remote") || !strings.Contains(viewText(m), "dotfiles") {
+		t.Fatal("help lacks companion actions")
+	}
+}

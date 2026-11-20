@@ -56,6 +56,14 @@ case "$1 $2" in
 esac
 """
 
+FAKE_HC = r"""#!/bin/sh
+printf 'hc %s\n' "$*" >> "$FAKE_LOG"
+case "$1 $2" in
+  "machine ls") printf '{"machines":[]}\n';;
+  *) exit 0;;
+esac
+"""
+
 PROBE = """os=Linux
 arch=x86_64
 distro_id=ubuntu
@@ -82,6 +90,12 @@ CONFIG = """default_hub = "fakehub"
   ca_fingerprint = "sha256:abcd"
   ssh_host = "fakehub"
   panel = "127.0.0.1:7480"
+[[targets]]
+  id = "worker-1"
+  name = "worker-1"
+  ssh_host = "box2"
+  hub = "fakehub"
+  worker_name = "worker-1"
 """
 
 
@@ -146,7 +160,7 @@ class Terminal:
 def environment(root):
     fake = root / "bin"
     fake.mkdir()
-    for name, body in (("ssh", FAKE_SSH), ("longarm", FAKE_LONGARM)):
+    for name, body in (("ssh", FAKE_SSH), ("longarm", FAKE_LONGARM), ("hc", FAKE_HC)):
         p = fake / name
         p.write_text(body)
         p.chmod(0o755)
@@ -244,6 +258,23 @@ def ctrl_c_in_handoff(env, root):
         (root / "slow").unlink(missing_ok=True)
 
 
+def companion_remotes_cancel(env, log):
+    """The remotes picker preselects unregistered machines; Review shows the
+    hc command; canceling there registers nothing."""
+    log.write_text("")
+    t = Terminal(["companion", "remotes", "--tool", "hc"], env)
+    t.wait("Register which machines in hc?")
+    assert "worker-1" in t.text(), t.text()
+    t.send("\r")
+    t.wait("Review")
+    t.wait("hc machine add box2 --install --name worker-1")
+    t.send("\x03")
+    code = t.exit_code()
+    assert code == 130, f"canceled review exit {code}\n{t.text()}"
+    assert "hc machine add" not in log.read_text(), "canceled review registered a machine"
+    print("companion remotes (picker/review/cancel, nothing applied): ok")
+
+
 def narrow(env):
     t = Terminal([], env, cols=64, rows=18)
     t.wait("worker-1")
@@ -263,6 +294,7 @@ def main():
         dashboard(env)
         wizard_cancel(env, root / "fake.log")
         ctrl_c_in_handoff(env, root)
+        companion_remotes_cancel(env, root / "fake.log")
         narrow(env)
 
 

@@ -73,13 +73,51 @@ pre-approved and usable only by you until you `longarm worker share` them.
 
 | Tab | Shows | Actions |
 |---|---|---|
-| 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `x`/Enter run `uname -a` · `s` `longarm ssh` |
+| 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
 | 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
 | 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel tunnel on/off · `U` panel login |
 
 Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus details ·
 `r` refresh (auto every 5 s; `[tui] refresh_seconds`) · `?` help · `q` quit.
 A failed refresh keeps the last rows and marks them stale in the header.
+
+## Companions
+
+lazylongarm knows the fleet's machines, so it can set up the tools you use next
+to Longarm without retyping hosts. Machines are targets (by name) or SSH hosts;
+bare in a terminal each command offers a picker; `--all` takes every managed
+machine. Both setup commands are plans (`--dry-run [--json]`, Review, `--yes`)
+and leave work that is already done alone.
+
+| Command | What it does |
+|---|---|
+| `companion status [--no-remote]` | hc / herdr columns from their machine lists here; a dotfiles column from a read-only check over SSH (chezmoi source, origin, revision) |
+| `companion remotes` | for each machine hc or herdr does not list: `hc machine add <ssh-host> --install --name <machine>` (copies hc there when missing or old) and `herdr machine add <ssh-host> --label <machine>` (installs and starts the herdr server there; approve its prompts in the terminal). `--tool hc\|herdr` limits it; a tool not installed here is skipped with a warning |
+| `companion dotfiles` | bootstraps chezmoi dotfiles in your terminal (`ssh -tt`, so sudo prompts work), then records the bundle and revision on the target. A machine that already has dotfiles is skipped (`--update` runs `chezmoi update --init`); one with dotfiles from another repository is refused, never replaced |
+
+lazylongarm only calls hc's and herdr's public CLIs; it never edits their state
+files. Your personal values go in the config:
+
+```toml
+[companions.dotfiles]
+repo = "https://github.com/you/dotfiles.git"   # URL, "user" or "user/repo"
+# Optional: your own bootstrap instead of the built-in
+#   chezmoi install (get.chezmoi.io → ~/.local/bin) + chezmoi init --apply --promptDefaults <repo>
+bootstrap = "curl -fsSL https://raw.githubusercontent.com/you/dotfiles/main/bootstrap.sh | bash -s -- --yes --bundle {bundle}"
+default_bundle = "server"
+
+[companions.dotfiles.bundle_by_os]
+darwin = "laptop"
+linux = "server"
+```
+
+Placeholders in `bootstrap`: `{repo}` `{bundle}` `{name}` `{os}` `{arch}`
+`{distro}`, replaced by shell-quoted values (`${VAR}` is left to the shell). An
+unknown placeholder, or one used without a value, stops the plan. The bundle is
+`--bundle`, else the target's `dotfiles_bundle`, else `bundle_by_os[<os>]`,
+else `default_bundle`. Without a bootstrap template, prompts are answered with
+their defaults; put the bundle logic in your dotfiles' own bootstrap script
+when you need per-machine answers.
 
 ## Hub VM (Azure)
 

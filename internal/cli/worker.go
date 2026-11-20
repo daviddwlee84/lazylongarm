@@ -162,6 +162,11 @@ func (o *options) finishWorkerAdd(cmd *cobra.Command, p *plan.Plan, f *workerAdd
 		fmt.Fprintf(out, "  longarm exec %s -- nproc\n", name)
 		fmt.Fprintf(out, "  longarm run %s -- sleep 120     # then watch it in the dashboard's Jobs tab\n", name)
 		fmt.Fprintf(out, "  lazylongarm                       # dashboard\n")
+		if f.req.Host != "" {
+			fmt.Fprintf(out, "\nCompanions (optional):\n")
+			fmt.Fprintf(out, "  lazylongarm companion remotes %s    # register it in hc / herdr here\n", name)
+			fmt.Fprintf(out, "  lazylongarm companion dotfiles %s   # bootstrap your chezmoi dotfiles there\n", name)
+		}
 	}
 	return nil
 }

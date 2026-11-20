@@ -1,6 +1,6 @@
 # lazylongarm host probe: read-only, POSIX sh, prints key=value lines.
 # Never prompts: sudo is only tried with -n.
-PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/sbin:/sbin:$PATH"
+PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin:/usr/sbin:/sbin:$PATH"
 LC_ALL=C; export LC_ALL
 kv() { printf '%s=%s\n' "$1" "$2"; }
 has() { command -v "$1" >/dev/null 2>&1; }
@@ -22,7 +22,7 @@ if has sudo; then
 else
   kv sudo absent
 fi
-for c in curl wget systemctl launchctl docker apt-get dnf gpg tailscale python3 ss lsof sha256sum shasum; do
+for c in curl wget git chezmoi systemctl launchctl docker apt-get dnf gpg tailscale python3 ss lsof sha256sum shasum; do
   if has "$c"; then kv "has_$c" yes; fi
 done
 if has tailscale; then kv tailscale_ip "$(tailscale ip -4 2>/dev/null | head -n1)"; fi

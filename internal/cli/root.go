@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/daviddwlee84/lazylongarm/internal/companion"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
@@ -55,6 +56,8 @@ type Dependencies struct {
 	Terminal func(io.Reader, io.Writer) bool
 	RunTUI   func(ctx context.Context, opts *options) error
 	Exec     func(*exec.Cmd) error // runs a command attached to the terminal
+	// Companion finds and queries hc/herdr on this machine.
+	Companion companion.Tools
 }
 
 type options struct {
@@ -136,6 +139,9 @@ func New(deps Dependencies) (*cobra.Command, *options) {
 	if deps.Exec == nil {
 		deps.Exec = func(c *exec.Cmd) error { return c.Run() }
 	}
+	if deps.Companion.Run == nil {
+		deps.Companion = companion.System()
+	}
 	if deps.RunTUI == nil {
 		deps.RunTUI = runDashboard
 	}
@@ -174,7 +180,7 @@ operating guide with --skill.`,
 	pf.BoolVar(&o.json, "json", false, "machine-readable output (never prompts)")
 	pf.StringVar(&o.color, "color", "auto", "auto | always | never (NO_COLOR is honored in auto)")
 	root.Flags().Bool("skill", false, "print the bundled agent operating guide")
-	root.AddCommand(hubCommand(o), workerCommand(o), statusCommand(o), settingsCommand(o), skillCommand(o), versionCommand(o), upgradeCommand(o))
+	root.AddCommand(hubCommand(o), workerCommand(o), statusCommand(o), settingsCommand(o), companionCommand(o), skillCommand(o), versionCommand(o), upgradeCommand(o))
 	return root, o
 }
 
