@@ -1,0 +1,19 @@
+bin/
+# hub backups contain the CA private key; never commit them
+longarm-hub-*.tar.gz
+*.tar.gz.age
+
+# Ephemeral coding-agent state (same as the sibling lazy* repos)
+.claude/worktrees/
+.claude/settings.local.json
+.specstory/statistics.json
+.DS_Store
+# release build output
+dist/
+completions/
+# Session transcripts, research and plans live in the private notes repo
+# (they contain account identifiers and hostnames)
+.specstory/history/
+.specstory/references/
+.claude/plans/
+__pycache__/

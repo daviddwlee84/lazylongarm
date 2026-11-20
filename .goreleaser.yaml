@@ -1,0 +1,37 @@
+version: 2
+project_name: lazylongarm
+before:
+  hooks:
+    - sh -c 'mkdir -p completions && for s in bash zsh fish; do go run ./cmd/lazylongarm completion "$s" > "completions/lazylongarm.$s"; done'
+builds:
+  - id: lazylongarm
+    main: ./cmd/lazylongarm
+    binary: lazylongarm
+    env: [CGO_ENABLED=0]
+    # lazylongarm drives the local `sh` and OpenSSH: macOS and Linux only.
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath, -buildvcs=true]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X github.com/daviddwlee84/lazylongarm/internal/cli.Version=v{{ .Version }} -X github.com/daviddwlee84/lazylongarm/internal/selfupdate.Channel=release-archive
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info: { mode: 0644, mtime: "{{ .CommitDate }}" }
+      - src: README.md
+        info: { mode: 0644, mtime: "{{ .CommitDate }}" }
+      - src: completions/*
+        info: { mode: 0644, mtime: "{{ .CommitDate }}" }
+checksum:
+  name_template: checksums.txt
+release:
+  draft: true
+changelog:
+  use: git
+  filters:
+    exclude: ["^docs", "^chore"]

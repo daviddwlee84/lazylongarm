@@ -1,0 +1,135 @@
+{
+  "nodes": [
+    {
+      "arch": "amd64",
+      "cert_name": "worker-1",
+      "cert_not_after": "2026-11-03T09:00:00Z",
+      "endpoints": [
+        "longnet://100.64.0.11:7701?name=worker-1",
+        "tcp://100.64.0.11:7701"
+      ],
+      "hostname": "pc-1",
+      "id": "3f2a9c1e-8b7d-4c5e-9f1a-2b3c4d5e6f70",
+      "isolation": "shared",
+      "jobs_active": 1,
+      "joined_at": "2026-11-03T09:00:00Z",
+      "labels": {
+        "arch": "amd64",
+        "os": "windows"
+      },
+      "last_seen": "2026-11-03T09:00:00Z",
+      "machine": "worker-1",
+      "metrics": {
+        "agents": {
+          "claude": {
+            "mem_bytes": "340848640",
+            "processes": 1,
+            "sessions": 1
+          },
+          "copilot": {}
+        },
+        "cpu_percent": 15.6,
+        "disk_free_bytes": "703490949120",
+        "disk_total_bytes": "992617689088",
+        "jobs_running": 1,
+        "mem_total_bytes": "137385308160",
+        "mem_used_bytes": "41944735744",
+        "net_rx_bytes_per_sec": "49149",
+        "net_tx_bytes_per_sec": "45130",
+        "nproc": 311,
+        "threads": 32,
+        "time": "2026-11-03T09:00:00Z",
+        "uptime_seconds": "619143"
+      },
+      "name": "worker-1",
+      "online": true,
+      "os": "windows",
+      "owner": "alice",
+      "reserved_gb": 2,
+      "role": "worker",
+      "state": "approved",
+      "toolchain": {
+        "state": "none",
+        "updated_at": "2026-11-03T09:00:00Z",
+        "versions": {
+          "claude": "2.1.310",
+          "copilot": "",
+          "gh": "",
+          "git": "2.56.0",
+          "go": "",
+          "node": "26.13.0",
+          "pnpm": "10.32.1",
+          "pwsh": "7.6.9",
+          "uv": ""
+        }
+      },
+      "version": "v1.9.0"
+    },
+    {
+      "arch": "amd64",
+      "cert_name": "worker-2",
+      "cert_not_after": "2026-11-03T09:00:00Z",
+      "endpoints": [
+        "longnet://100.64.0.11:7701?name=worker-2",
+        "tcp://100.64.0.11:7701"
+      ],
+      "hostname": "pc-1",
+      "id": "3f2a9c1e-8b7d-4c5e-9f1a-2b3c4d5e6f70",
+      "isolation": "shared",
+      "joined_at": "2026-11-03T09:00:00Z",
+      "labels": {
+        "arch": "amd64",
+        "os": "windows",
+        "pool": "e2e",
+        "tier": "test"
+      },
+      "last_seen": "2026-11-03T09:00:00Z",
+      "machine": "worker-2",
+      "metrics": {
+        "agents": {
+          "claude": {
+            "mem_bytes": "340848640",
+            "processes": 1,
+            "sessions": 1
+          },
+          "copilot": {}
+        },
+        "cpu_percent": 16.1,
+        "disk_free_bytes": "703490945024",
+        "disk_total_bytes": "992617689088",
+        "mem_total_bytes": "137385308160",
+        "mem_used_bytes": "41944268800",
+        "net_rx_bytes_per_sec": "63500",
+        "net_tx_bytes_per_sec": "47570",
+        "nproc": 311,
+        "threads": 32,
+        "time": "2026-11-03T09:00:00Z",
+        "uptime_seconds": "619143"
+      },
+      "name": "worker-2",
+      "online": true,
+      "os": "windows",
+      "profile": "base",
+      "role": "worker",
+      "state": "approved",
+      "toolchain": {
+        "profile": "base",
+        "revision": "1",
+        "state": "ok",
+        "updated_at": "2026-11-03T09:00:00Z",
+        "versions": {
+          "claude": "2.1.310",
+          "copilot": "",
+          "gh": "",
+          "git": "2.56.0",
+          "go": "",
+          "node": "26.13.0",
+          "pnpm": "10.32.1",
+          "pwsh": "7.6.9",
+          "uv": ""
+        }
+      },
+      "version": "v1.9.0"
+    }
+  ]
+}
