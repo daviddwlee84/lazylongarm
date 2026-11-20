@@ -56,6 +56,11 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   probe should flag a service account in the `docker` group or with
   `NOPASSWD: ALL` sudo: with shared isolation every job on that worker gets
   root without a password.
+- **GPU column in the Fleet tab (P3, S)**: Longarm's metrics stop at CPU and
+  memory (GPU scheduling is an upstream non-goal). Poll `longarm exec <w> --
+  nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu
+  --format=csv,noheader,nounits` on workers that have it (slowly, cached) and
+  show utilization / VRAM; offer to set a `gpu=<model>` label from it.
 - **HTTPS bridge for Anthropic-hosted Claude sessions (P3, L)**: remote MCP
   connector in front of the hub. → [backlog](backlog/https-bridge.md)
 - **Authenticated MCP gateway on a trusted LAN (P4, M)**: `longarm mcp` behind
