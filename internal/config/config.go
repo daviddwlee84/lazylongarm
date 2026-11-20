@@ -30,10 +30,11 @@ const (
 
 // Config is the whole file.
 type Config struct {
-	DefaultHub string   `toml:"default_hub,omitempty"`
-	Hubs       []Hub    `toml:"hubs,omitempty"`
-	Targets    []Target `toml:"targets,omitempty"`
-	TUI        TUI      `toml:"tui,omitempty"`
+	DefaultHub string     `toml:"default_hub,omitempty"`
+	Hubs       []Hub      `toml:"hubs,omitempty"`
+	Targets    []Target   `toml:"targets,omitempty"`
+	TUI        TUI        `toml:"tui,omitempty"`
+	Companions Companions `toml:"companions,omitempty"`
 
 	path   string
 	digest string
@@ -78,6 +79,33 @@ type Target struct {
 	Install    string `toml:"install,omitempty"` // "push" (lazylongarm copied binaries to ~/.local/bin) | "existing"
 	Service    string `toml:"service,omitempty"` // "system" | "none"
 	AddedAt    string `toml:"added_at,omitempty"`
+
+	// Companion state, written by `lazylongarm companion dotfiles`.
+	DotfilesBundle    string `toml:"dotfiles_bundle,omitempty"`     // bundle used (or to use) for this machine
+	DotfilesRev       string `toml:"dotfiles_rev,omitempty"`        // source revision seen after the last bootstrap
+	DotfilesAppliedAt string `toml:"dotfiles_applied_at,omitempty"` // RFC 3339
+}
+
+// Companions configures the tools lazylongarm sets up next to Longarm on
+// fleet machines. Personal values (repository, bundles) live only here.
+type Companions struct {
+	Dotfiles Dotfiles `toml:"dotfiles,omitempty"`
+}
+
+// Dotfiles configures `lazylongarm companion dotfiles`.
+type Dotfiles struct {
+	// Repo is the chezmoi source repository (URL, "user" or "user/repo").
+	Repo string `toml:"repo,omitempty"`
+	// Bootstrap is an optional shell command template run on the machine
+	// instead of the built-in chezmoi install + init. Placeholders {repo},
+	// {bundle}, {name}, {os}, {arch} and {distro} are replaced by
+	// shell-quoted values.
+	Bootstrap string `toml:"bootstrap,omitempty"`
+	// DefaultBundle is used when neither the command line, the target nor
+	// BundleByOS names one.
+	DefaultBundle string `toml:"default_bundle,omitempty"`
+	// BundleByOS maps a probed OS ("linux", "darwin") to a bundle.
+	BundleByOS map[string]string `toml:"bundle_by_os,omitempty"`
 }
 
 // TUI preferences.
@@ -203,10 +231,19 @@ func (c *Config) RemoveHub(id string) {
 	}
 }
 
-// UpsertTarget inserts or replaces t by ID.
+// UpsertTarget inserts or replaces t by ID. Replacing keeps the original
+// added_at and the companion state when t leaves them empty, so rerunning
+// `worker add` does not forget what `companion dotfiles` recorded.
 func (c *Config) UpsertTarget(t Target) {
 	for i := range c.Targets {
 		if c.Targets[i].ID == t.ID {
+			old := c.Targets[i]
+			if t.AddedAt == "" {
+				t.AddedAt = old.AddedAt
+			}
+			if t.DotfilesBundle == "" && t.DotfilesRev == "" && t.DotfilesAppliedAt == "" {
+				t.DotfilesBundle, t.DotfilesRev, t.DotfilesAppliedAt = old.DotfilesBundle, old.DotfilesRev, old.DotfilesAppliedAt
+			}
 			c.Targets[i] = t
 			return
 		}
@@ -216,6 +253,16 @@ func (c *Config) UpsertTarget(t Target) {
 	}
 	c.Targets = append(c.Targets, t)
 	sort.SliceStable(c.Targets, func(i, j int) bool { return c.Targets[i].ID < c.Targets[j].ID })
+}
+
+// TargetByName finds a target by id or name.
+func (c *Config) TargetByName(name string) (*Target, bool) {
+	for i := range c.Targets {
+		if c.Targets[i].ID == name || c.Targets[i].Name == name {
+			return &c.Targets[i], true
+		}
+	}
+	return nil, false
 }
 
 // TargetByHost finds the target managed through sshHost ("" = local).

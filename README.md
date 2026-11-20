@@ -97,6 +97,9 @@ is already in place; the journal lives in `$XDG_STATE_HOME/lazylongarm/ops/`.
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags) |
 | `worker ls` | hub registry merged with machines lazylongarm manages |
+| `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
+| `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer |
+| `companion dotfiles [machine…] \| --all` | bootstrap (or `--update`) chezmoi dotfiles on fleet machines |
 | `status [--doctor]` | configured hubs, local client, `longarm doctor` |
 | `skill sync` | Longarm's skill into `~/.agents/skills` + Claude symlinks; lazylongarm stub skill |
 | `settings show \| path` | effective configuration and paths |
@@ -111,7 +114,7 @@ stderr), `--color auto|always|never`. Exit codes: 0 ok, 1 failure, 2 usage,
 
 | Path | Content |
 |---|---|
-| `$XDG_CONFIG_HOME/lazylongarm/config.toml` | hubs and managed targets (no secrets) |
+| `$XDG_CONFIG_HOME/lazylongarm/config.toml` | hubs, managed targets and `[companions]` settings (no secrets) |
 | `$XDG_STATE_HOME/lazylongarm/ops/*.json` | per-operation journals (step statuses only) |
 | `$XDG_CACHE_HOME/lazylongarm/releases/<tag>/` | verified Longarm release binaries |
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `companion status|remotes|dotfiles`: register fleet machines in hc and herdr
+  on this computer, bootstrap or update chezmoi dotfiles on them (built-in
+  chezmoi install + `init --apply`, or your own bootstrap command template with
+  `{bundle}` and friends), and show both per machine. Personal values live in
+  `[companions.dotfiles]`; nothing already set up is replaced.
+- Dashboard Fleet tab: `R` registers the selected machine in hc/herdr, `D` sets
+  up its dotfiles.
+- The host probe also reports `git` and `chezmoi`; rerunning `worker add` keeps
+  a target's `added_at` and companion state.
+
 ## v0.1.0 — 2026-11-21
 
 First public release.

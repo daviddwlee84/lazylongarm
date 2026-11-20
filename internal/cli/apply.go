@@ -64,7 +64,7 @@ func (o *options) apply(cmd *cobra.Command, p *plan.Plan, env *plan.Env, ao appl
 				return err
 			}
 			c.Stdin, c.Stdout, c.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), errOut
-			fmt.Fprintln(errOut, "  ── terminal handed to sudo ──")
+			fmt.Fprintln(errOut, "  ── terminal handed over ──")
 			err = o.deps.Exec(c)
 			fmt.Fprintln(errOut, "  ── back in lazylongarm ──")
 			return err

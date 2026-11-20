@@ -23,6 +23,9 @@ plan.
 | Preview adding a worker | `lazylongarm worker add <ssh-alias> [--name N] [--label k=v] [--service system\|user] --dry-run --json` |
 | Apply it | same plus `--yes --json` |
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
+| hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
+| Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
+| Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--update] --dry-run --json` |
 | Effective config and paths | `lazylongarm settings show` |
 
 Errors are a JSON envelope on stderr: `{"error":{"code","message","fix"?,"step"?}}`.
@@ -44,5 +47,9 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   15-minute owner code with `longarm worker add`, passes it over ssh stdin,
   installs the service and waits until `longarm worker ls --json` shows it
   online.
+- Companion setup never replaces another tool's state: machines already in hc
+  or herdr, and dotfiles already set up, are skipped; dotfiles from a different
+  repository are refused. The dotfiles bootstrap and `herdr machine add` may
+  prompt, so let the user run the apply in their terminal.
 - For jobs, use Longarm directly (`longarm run|jobs|logs|kill --json`); its
   `--json` output and exit codes are the stable contract (docs/programs.md).

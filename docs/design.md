@@ -15,6 +15,7 @@ internal/hubhost       hub.toml render, bootstrap.env / ca show parsing
 internal/cloudfw       Azure NSG discovery and rule planning via `az`
 internal/release       GitHub release download + SHA256SUMS verification + cache
 internal/fleet         hub registry ⨝ managed targets; hub status checks
+internal/companion     hc/herdr machine lists via their CLIs; chezmoi state script, bootstrap templates
 internal/config        XDG paths, TOML config with lock + conflict detection
 internal/secret        redacting wrapper for join codes / TOTP secrets
 ```
@@ -43,6 +44,15 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
   `read -r code` wrapper over ssh stdin. Local `longarm join` has to take it
   as an argument (upstream has no stdin form; it is single-use, 15 min).
 - **XDG everywhere**, including macOS, for lazylongarm's own files.
+
+## Companions
+
+`companion remotes|dotfiles` reuse the plan engine: `flows.BuildCompanionRemotes`
+(local steps; Check = the tool already lists the machine) and
+`flows.BuildCompanionDotfiles` (bootstrap or update over `ssh -tt` → verify →
+record on the target). Other tools' inventories are read through their public
+`--json` output only. Personal values (repository, bundles, a bootstrap command)
+live in the user's config; the code and docs carry only placeholders.
 
 ## Not done (see TODO)
 
