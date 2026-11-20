@@ -2,6 +2,7 @@ package flows
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,46 @@ func TestWorkerPlanAndOnlineWait(t *testing.T) {
 	}
 	if env.Get("worker_path") != "relay" || len(client.execed) != 1 {
 		t.Fatalf("path %q exec %v", env.Get("worker_path"), client.execed)
+	}
+}
+
+// Two overlapping `worker add` runs each hold the config loaded at startup;
+// the one that finishes second must still record its target, and so must a
+// retry of the step.
+func TestOverlappingWorkerAddsBothRecordTargets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	hub := config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "sha256:aa", Mode: config.ModePublic}
+	seed, _ := config.Load(path, false)
+	if err := seed.Update(func(c *config.Config) error { c.UpsertHub(hub); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	saveStep := func(cfg *config.Config, host string) plan.Step {
+		p, err := BuildWorkerAdd(WorkerRequest{Host: host, Hub: &hub, Version: "v0.1.42"}, ubuntu(), WorkerDeps{Config: cfg, Client: &fakeClient{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Steps[len(p.Steps)-1]
+	}
+	a, _ := config.Load(path, true)
+	b, _ := config.Load(path, true)
+	stepA, stepB := saveStep(a, "worker-1"), saveStep(b, "worker-2")
+	for _, run := range []struct {
+		name string
+		step plan.Step
+	}{{"worker-1", stepA}, {"worker-2", stepB}, {"worker-2 retry", stepB}} {
+		if run.step.ID != "save-target" {
+			t.Fatalf("last step %s", run.step.ID)
+		}
+		if err := run.step.Apply(context.Background(), plan.NewEnv()); err != nil {
+			t.Fatalf("%s: %v", run.name, err)
+		}
+	}
+	loaded, err := config.Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Targets) != 2 || loaded.Targets[0].ID != "worker-1" || loaded.Targets[1].ID != "worker-2" {
+		t.Fatalf("targets %+v", loaded.Targets)
 	}
 }
 

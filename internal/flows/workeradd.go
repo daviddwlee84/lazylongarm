@@ -450,8 +450,12 @@ echo "longarmd started (pid $!)"`, args...))
 				return nil
 			}
 			t := workerTarget(req, f)
-			deps.Config.UpsertTarget(t)
-			if err := deps.Config.Save(); err != nil {
+			// Re-read under the lock: another `worker add` may have saved
+			// its own target while this one was busy for minutes.
+			if err := deps.Config.Update(func(c *config.Config) error {
+				c.UpsertTarget(t)
+				return nil
+			}); err != nil {
 				return err
 			}
 			env.Logf("  saved target %q", t.ID)

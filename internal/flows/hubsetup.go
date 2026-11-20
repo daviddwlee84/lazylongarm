@@ -505,22 +505,24 @@ echo "CA ready; admin join code written to $3 (0600)"`, hubhost.Binary, hubhost.
 		if deps.Config == nil {
 			return nil
 		}
-		h := config.Hub{ID: hubID, Name: req.Name, Mode: req.Mode, Address: address, CAFingerprint: env.Get("ca_fingerprint"), SSHHost: host, Panel: settings.Panel, Version: req.Version}
-		if old, ok := deps.Config.Hub(hubID); ok && old.ID == hubID {
-			h.CreatedAt = old.CreatedAt
-			h.ConfigDir = old.ConfigDir
-			if h.Version == "" {
-				h.Version = old.Version
+		if err := deps.Config.Update(func(c *config.Config) error {
+			h := config.Hub{ID: hubID, Name: req.Name, Mode: req.Mode, Address: address, CAFingerprint: env.Get("ca_fingerprint"), SSHHost: host, Panel: settings.Panel, Version: req.Version}
+			if old, ok := c.Hub(hubID); ok && old.ID == hubID {
+				h.CreatedAt = old.CreatedAt
+				h.ConfigDir = old.ConfigDir
+				if h.Version == "" {
+					h.Version = old.Version
+				}
 			}
-		}
-		if req.Cloud == "azure" && deps.AzureVM != nil {
-			h.Cloud = &config.Cloud{Provider: "azure", Subscription: deps.AzureVM.Subscription, ResourceGroup: deps.AzureVM.ResourceGroup, VM: deps.AzureVM.Name, Rules: ruleNames(settings)}
-			if len(deps.AzureVM.NSGs) > 0 {
-				h.Cloud.NSG = deps.AzureVM.NSGs[0]
+			if req.Cloud == "azure" && deps.AzureVM != nil {
+				h.Cloud = &config.Cloud{Provider: "azure", Subscription: deps.AzureVM.Subscription, ResourceGroup: deps.AzureVM.ResourceGroup, VM: deps.AzureVM.Name, Rules: ruleNames(settings)}
+				if len(deps.AzureVM.NSGs) > 0 {
+					h.Cloud.NSG = deps.AzureVM.NSGs[0]
+				}
 			}
-		}
-		deps.Config.UpsertHub(h)
-		if err := deps.Config.Save(); err != nil {
+			c.UpsertHub(h)
+			return nil
+		}); err != nil {
 			return err
 		}
 		env.Set("hub_id", hubID)

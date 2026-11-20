@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,113 @@ func TestSaveDetectsConcurrentEdit(t *testing.T) {
 	b.UpsertHub(Hub{ID: "z", Mode: ModePublic, Address: "z:1"})
 	if err := b.Save(); err != ErrConflict {
 		t.Fatalf("stale save: %v", err)
+	}
+}
+
+// Two long-running commands (e.g. `worker add` on two machines) load the
+// config at startup and each record their own target minutes later.
+func TestUpdateKeepsConcurrentTargets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	seed, _ := Load(path, false)
+	if err := seed.Update(func(c *Config) error {
+		c.UpsertHub(Hub{ID: "hub", Mode: ModePublic, Address: "hub.example.com:7443"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := Load(path, true)
+	b, _ := Load(path, true)
+	add := func(c *Config, id string) error {
+		return c.Update(func(c *Config) error {
+			c.UpsertTarget(Target{ID: id, Name: id, SSHHost: id, Hub: "hub"})
+			return nil
+		})
+	}
+	if err := add(a, "worker-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := add(b, "worker-2"); err != nil {
+		t.Fatalf("second writer: %v", err)
+	}
+	loaded, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Targets) != 2 || loaded.Targets[0].ID != "worker-1" || loaded.Targets[1].ID != "worker-2" {
+		t.Fatalf("targets %+v", loaded.Targets)
+	}
+	// b's in-memory config follows the file, so it can keep saving.
+	if _, ok := b.TargetByName("worker-1"); !ok || len(b.Targets) != 2 {
+		t.Fatalf("b not refreshed: %+v", b.Targets)
+	}
+	if err := b.Save(); err != nil {
+		t.Fatalf("save after update: %v", err)
+	}
+	// Same entry: the last writer wins for that target, others survive.
+	if err := a.Update(func(c *Config) error {
+		c.UpsertTarget(Target{ID: "worker-2", Name: "worker-2", SSHHost: "worker-2", Hub: "hub", Service: "system"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = Load(path, true)
+	if w2, _ := loaded.TargetByName("worker-2"); len(loaded.Targets) != 2 || w2.Service != "system" {
+		t.Fatalf("same-entry update: %+v", loaded.Targets)
+	}
+}
+
+// A stale whole-document Save conflicts; recording the change again through
+// Update (what a step retry does) succeeds and keeps the other edit.
+func TestUpdateRetryAfterConflict(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	stale, _ := Load(path, false)
+	other, _ := Load(path, false)
+	if err := other.Update(func(c *Config) error {
+		c.UpsertTarget(Target{ID: "worker-1"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale.UpsertTarget(Target{ID: "worker-2"})
+	if err := stale.Save(); err != ErrConflict {
+		t.Fatalf("stale save: %v", err)
+	}
+	for i := 0; i < 2; i++ { // idempotent: retrying again is harmless
+		if err := stale.Update(func(c *Config) error {
+			c.UpsertTarget(Target{ID: "worker-2"})
+			return nil
+		}); err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+	}
+	loaded, _ := Load(path, true)
+	if len(loaded.Targets) != 2 || loaded.Targets[0].ID != "worker-1" || loaded.Targets[1].ID != "worker-2" {
+		t.Fatalf("targets %+v", loaded.Targets)
+	}
+}
+
+func TestUpdateErrorWritesNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	c, _ := Load(path, false)
+	boom := errors.New("boom")
+	if err := c.Update(func(c *Config) error {
+		c.UpsertTarget(Target{ID: "worker-1"})
+		return boom
+	}); err != boom {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) || len(c.Targets) != 0 {
+		t.Fatalf("written or changed: %v %+v", err, c.Targets)
+	}
+	// An invalid result is refused too.
+	if err := c.Update(func(c *Config) error {
+		c.UpsertTarget(Target{ID: "worker-1", Hub: "missing"})
+		return nil
+	}); err == nil {
+		t.Fatal("invalid config written")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("invalid config written: %v", err)
 	}
 }
 

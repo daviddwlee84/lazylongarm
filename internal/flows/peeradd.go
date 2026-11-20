@@ -193,8 +193,12 @@ if [ "$5" = force ]; then "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$
 			}
 			t := workerTarget(req.WorkerRequest, f)
 			t.ClientName = req.ClientName
-			deps.Config.UpsertTarget(t)
-			if err := deps.Config.Save(); err != nil {
+			// Re-read under the lock, like worker add: another command may
+			// have recorded to the config while this one was running.
+			if err := deps.Config.Update(func(c *config.Config) error {
+				c.UpsertTarget(t)
+				return nil
+			}); err != nil {
 				return err
 			}
 			env.Logf("  saved target %q (client %s)", t.ID, t.ClientName)
