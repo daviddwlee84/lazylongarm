@@ -51,6 +51,14 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
   the file, change only this operation's entry (one target, one hub), write,
   release. Overlapping long runs (two `worker add`s) both keep their entries,
   and a retried step starts from the current file.
+- **The config is shared across builds.** A release, a global install and a
+  dev build may all use one file, so keys this build does not know are not an
+  error: they load with one stderr warning (newer lazylongarm, or a typo from
+  hand-editing) and are written back as they were. Unknown keys in `[[hubs]]`
+  and `[[targets]]` follow their entry by `id`, so deleting an entry deletes
+  them too. When unknown keys are present the file is written from maps, so
+  keys come out sorted; otherwise struct order is kept. Malformed TOML, type
+  mismatches and failed validation still refuse to load.
 
 ## Companions
 

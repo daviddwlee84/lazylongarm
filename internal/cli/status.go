@@ -113,7 +113,7 @@ func settingsCommand(o *options) *cobra.Command {
 			}
 			state, _ := config.StateDir()
 			cache, _ := config.CacheDir()
-			return writeJSON(cmd.OutOrStdout(), map[string]any{"path": o.cfg.Path(), "state_dir": state, "cache_dir": cache, "config": o.cfg})
+			return writeJSON(cmd.OutOrStdout(), map[string]any{"path": o.cfg.Path(), "state_dir": state, "cache_dir": cache, "config": o.cfg, "unknown_keys": o.cfg.UnknownKeys()})
 		},
 	})
 	return c

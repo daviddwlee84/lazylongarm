@@ -197,7 +197,20 @@ func (o *options) load() error {
 		return err
 	}
 	o.cfg = cfg
+	warnUnknownKeys(o.err, cfg)
 	return nil
+}
+
+// warnUnknownKeys tells the user (on stderr, so --json output stays clean)
+// that the config has keys this build does not know. They usually come from
+// a newer lazylongarm sharing the file; a hand-edited typo shows up here too.
+func warnUnknownKeys(w io.Writer, cfg *config.Config) {
+	keys := cfg.UnknownKeys()
+	if len(keys) == 0 || w == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "! %s: settings unknown to lazylongarm %s: %s\n", cfg.Path(), versionString(), strings.Join(keys, ", "))
+	_, _ = fmt.Fprintln(w, "  probably from a newer lazylongarm (run `lazylongarm upgrade`), or a typo; they are kept when lazylongarm saves")
 }
 
 func (o *options) interactive(cmd *cobra.Command) bool {

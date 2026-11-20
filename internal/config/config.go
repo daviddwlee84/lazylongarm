@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -37,8 +38,9 @@ type Config struct {
 	TUI        TUI        `toml:"tui,omitempty"`
 	Companions Companions `toml:"companions,omitempty"`
 
-	path   string
-	digest string
+	path    string
+	digest  string
+	unknown []unknownKey // keys this build does not know; kept on write
 }
 
 // Hub is a longarm-hub this machine is (or will be) enrolled with.
@@ -142,21 +144,40 @@ func Load(path string, explicit bool) (*Config, error) {
 }
 
 // read parses and validates path, remembering the digest of what it read.
+// Keys this build does not know are not an error: they are recorded (see
+// UnknownKeys) and written back. Broken TOML, type mismatches and failed
+// validation still are.
 func read(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	c := &Config{}
-	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(c); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	if err := toml.Unmarshal(data, c); err != nil {
+		return nil, parseError(path, err)
 	}
+	raw := map[string]any{}
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return nil, parseError(path, err)
+	}
+	c.unknown = findUnknown(raw, reflect.TypeOf(*c), nil)
 	c.path = path
 	c.digest = digest(data)
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return c, nil
+}
+
+// parseError names the file and, when go-toml knows it, the line.
+func parseError(path string, err error) error {
+	var de *toml.DecodeError
+	if errors.As(err, &de) {
+		if row, _ := de.Position(); row > 0 {
+			return fmt.Errorf("parse %s: line %d: %w", path, row, err)
+		}
+	}
+	return fmt.Errorf("parse %s: %w", path, err)
 }
 
 // Validate checks identity and references.
@@ -367,20 +388,27 @@ func (c *Config) lock() (func(), error) {
 	return lockFile(c.path + ".lock")
 }
 
-// write validates c and replaces the file atomically; the caller holds the
-// lock. c's digest then matches the file.
+// write validates c and replaces the file atomically, keeping the keys this
+// build does not know (see unknown.go); the caller holds the lock. c's digest
+// then matches the file.
 func (c *Config) write() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
 	dir := filepath.Dir(c.path)
-	var buf bytes.Buffer
-	buf.WriteString("# lazylongarm configuration (written by lazylongarm; safe to edit while it is not running)\n")
-	enc := toml.NewEncoder(&buf)
+	var body bytes.Buffer
+	enc := toml.NewEncoder(&body)
 	enc.SetIndentTables(true)
 	if err := enc.Encode(c); err != nil {
 		return err
 	}
+	merged, kept, err := c.withUnknown(body.Bytes())
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	buf.WriteString("# lazylongarm configuration (written by lazylongarm; safe to edit while it is not running)\n")
+	buf.Write(merged)
 	tmp, err := os.CreateTemp(dir, ".config-*.toml")
 	if err != nil {
 		return err
@@ -405,6 +433,7 @@ func (c *Config) write() error {
 		return err
 	}
 	c.digest = digest(buf.Bytes())
+	c.unknown = kept
 	return nil
 }
 
