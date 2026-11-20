@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — 2026-11-21
 
 - `companion status|remotes|dotfiles`: register fleet machines in hc and herdr
   on this computer, bootstrap or update chezmoi dotfiles on them (built-in
