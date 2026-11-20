@@ -42,8 +42,10 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   same command skips steps already in place; the journal is in
   `$XDG_STATE_HOME/lazylongarm/ops/`.
 - Hub setup targets Debian/Ubuntu via the official apt repository and
-  `longarm-hub.service`; the panel listens on 127.0.0.1:7480 only
-  (`lazylongarm hub panel` tunnels it for a human).
+  `longarm-hub.service`; the panel listens on 127.0.0.1:7480
+  (`lazylongarm hub panel` tunnels it for a human). `lazylongarm hub
+  panel-access tailnet|public|loopback` can add a tailnet URL (tailscale serve)
+  or public HTTPS; never switch to public without the user's explicit consent.
 - Worker add installs verified release binaries in `~/.local/bin` (`--fetch
   auto`, the default: the machine downloads them from GitHub, checked against
   the SHA256SUMS lazylongarm fetched, else they are pushed over ssh; `push`

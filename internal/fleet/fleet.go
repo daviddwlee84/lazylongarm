@@ -4,7 +4,9 @@ package fleet
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/flows"
 	"github.com/daviddwlee84/lazylongarm/internal/hubhost"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
+	"github.com/daviddwlee84/lazylongarm/internal/tailscalehost"
 )
 
 // Row merges a configured target with the hub's view.
@@ -144,6 +147,9 @@ func HubStatus(ctx context.Context, h *config.Hub) []HubCheck {
 			add("panel", "ok", fmt.Sprintf("%d login(s): %s", len(users), strings.Join(users, ", ")), "")
 		}
 	}
+	if c, ok := panelAccessCheck(ctx, h); ok {
+		checks = append(checks, c)
+	}
 	if err := flows.DialTCP(ctx, h.Address); err != nil {
 		add("reachable", "fail", "TCP "+h.Address+": "+err.Error(), "check the firewall / NSG and proxy TUN rules")
 	} else {
@@ -189,6 +195,57 @@ func HubStatus(ctx context.Context, h *config.Hub) []HubCheck {
 		add("client", "ok", fmt.Sprintf("enrolled as %s (%s) on %q, certificate until %s", w.Name, w.Role, w.HubName, w.CertNotAfter), "")
 	}
 	return checks
+}
+
+// panelAccessCheck verifies the tailnet/public panel URL `hub
+// panel-access` set up; loopback-only hubs have no extra check.
+func panelAccessCheck(ctx context.Context, h *config.Hub) (HubCheck, bool) {
+	c := HubCheck{ID: "panel-access"}
+	switch h.PanelMode() {
+	case config.PanelPublic:
+		url := h.PanelURL()
+		if err := flows.HTTPSGet(ctx, url+"healthz"); err != nil {
+			c.Status, c.Detail, c.Fix = "fail", "public "+url+": "+firstLine(err.Error()), "lazylongarm hub panel-access public (reruns the checks)"
+			return c, true
+		}
+		c.Status, c.Detail = "ok", "public "+url+" (HTTPS)"
+		if left, err := certDaysLeft(ctx, h.PanelAccess.Domain); err == nil {
+			c.Detail += fmt.Sprintf(", certificate valid %d more days", left)
+			if left < 14 {
+				c.Status, c.Fix = "warn", "longarm-hub renews it itself; check: ssh "+h.SSHHost+" sudo journalctl -u longarm-hub | grep -i acme"
+			}
+		}
+	case config.PanelTailnet:
+		if h.SSHHost == "" {
+			return c, false
+		}
+		res, err := connection.Run(ctx, connection.Request{Host: h.SSHHost, Sudo: true, Timeout: 30 * time.Second, Script: `tailscale serve status --json 2>/dev/null || true`})
+		switch {
+		case err != nil:
+			c.Status, c.Detail = "warn", "cannot read tailscale serve status: "+firstLine(err.Error())
+		case tailscalehost.Serves(res.Stdout, "http://"+orDefault(h.Panel, "127.0.0.1:7480")):
+			c.Status, c.Detail = "ok", "tailnet "+h.PanelURL()+" (tailscale serve)"
+		default:
+			c.Status, c.Detail, c.Fix = "fail", "tailscale serve no longer proxies the panel", "lazylongarm hub panel-access tailnet"
+		}
+	default:
+		return c, false
+	}
+	return c, true
+}
+
+func certDaysLeft(ctx context.Context, domain string) (int, error) {
+	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}, Config: &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12}}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(domain, "443"))
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return 0, fmt.Errorf("no certificate")
+	}
+	return int(time.Until(certs[0].NotAfter).Hours() / 24), nil
 }
 
 // PanelUsers lists the hub's web panel logins (`longarm-hub user ls`).

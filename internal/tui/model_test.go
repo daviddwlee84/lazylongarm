@@ -149,3 +149,28 @@ func TestFleetCompanionActions(t *testing.T) {
 		t.Fatal("help lacks companion actions")
 	}
 }
+
+func TestPanelKeyOpensDirectURLWithoutTunnel(t *testing.T) {
+	cfg := &config.Config{Hubs: []config.Hub{{ID: "hub-1", Mode: "public", Address: "hub.example.com:7443", SSHHost: "my-vps",
+		PanelAccess: &config.PanelAccess{Mode: config.PanelTailnet, URL: "https://hub-1.tail1234.ts.net/"}}}, DefaultHub: "hub-1"}
+	var opened []string
+	m := New(Options{Config: cfg, OpenURL: func(u string) error { opened = append(opened, u); return nil }})
+	m.width, m.height = 120, 30
+	m.tab = tabHub
+	if cmd := m.togglePanel(); cmd != nil || m.panelPending {
+		t.Fatal("a tailnet panel must not open an SSH tunnel")
+	}
+	if len(opened) != 1 || opened[0] != "https://hub-1.tail1234.ts.net/" {
+		t.Fatalf("opened %v", opened)
+	}
+	ids := map[string]bool{}
+	for _, a := range m.actions() {
+		ids[a.id] = a.enabled
+	}
+	if !ids["panel-access"] || !ids["panel"] {
+		t.Fatalf("hub actions: %v", ids)
+	}
+	if !strings.Contains(m.panelLine(&cfg.Hubs[0]), "tail1234.ts.net") {
+		t.Fatal(m.panelLine(&cfg.Hubs[0]))
+	}
+}

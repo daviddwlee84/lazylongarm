@@ -1,7 +1,7 @@
 # Future work
 
 Shipped in the first slice: `hub setup` (apt + systemd + Azure NSG + local admin
-enrollment), `hub status|panel|backup`, `worker add` (SSH or local; system or
+enrollment), `hub status|panel|panel-access|backup`, `worker add` (SSH or local; system or
 user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill.
 
 - **Hub VM in the dashboard (P3, S)**: `hub vm` exists (status/start/stop/
@@ -23,6 +23,19 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
 - **Private-network hub mode, end to end (P2, M)**: the plan supports
   `--mode private --address <tailnet-ip>`; add a guided choice of a tailnet
   machine, skip the cloud firewall, and document moving a hub (CA import).
+- **Existing / public hub mode (P2, L)**: today every flow assumes a hub we
+  operate over SSH (admin join codes, `hub.toml`, panel). Add `hub use <url>`
+  (config mode `existing`, CA pinned from the hub), enroll this machine with
+  `longarm login` and workers as owned workers via `longarmd login` (approve at
+  `/link`), and hide hub-host actions (setup, panel-user, panel-access, backup,
+  vm). Document the trust model first: the hub operator sees job metadata and,
+  by default (`[hub] remote_jobs = "control"`), can kill jobs and read logs;
+  offer `[access] hub_job_details = false` and `[update] disabled = true`.
+- **Sign-in providers for the public panel (P3, M)**: `hub panel-access public`
+  uses password + TOTP only. Add an optional `[auth.google]` / `[auth.microsoft]`
+  block: guide creating the OAuth client (redirect URI
+  `<public_url>/auth/callback/<provider>`), pass the client secret over stdin to
+  a root:longarm-hub 0640 file, set `admins` / `allowed`.
 - **Revoke/remove from lazylongarm (P2, S)**: dashboard action + `worker remove`
   wrapping `longarm admin revoke` / `worker remove`, then offer
   `worker add --reenroll`; a guided "lost admin device" flow (mint an admin

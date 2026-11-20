@@ -55,7 +55,42 @@ type Hub struct {
 	ConfigDir     string `toml:"config_dir,omitempty"`     // LONGARM_CONFIG_DIR for this hub; empty = Longarm default (~/.config/longarm)
 	Version       string `toml:"version,omitempty"`        // Longarm release used for workers we install
 	Cloud         *Cloud `toml:"cloud,omitempty"`
-	CreatedAt     string `toml:"created_at,omitempty"`
+	// PanelAccess records how the web panel is reachable beyond the SSH
+	// tunnel (`hub panel-access`); nil means loopback only.
+	PanelAccess *PanelAccess `toml:"panel_access,omitempty"`
+	CreatedAt   string       `toml:"created_at,omitempty"`
+}
+
+// Panel access modes (`lazylongarm hub panel-access`).
+const (
+	PanelLoopback = "loopback" // 127.0.0.1 on the hub host; reach it through an SSH tunnel
+	PanelTailnet  = "tailnet"  // tailscale serve on the hub host: HTTPS on the tailnet only
+	PanelPublic   = "public"   // longarm-hub serves HTTPS itself (Let's Encrypt) on the Internet
+)
+
+// PanelAccess is the panel exposure lazylongarm configured.
+type PanelAccess struct {
+	Mode      string `toml:"mode"`                 // PanelTailnet | PanelPublic
+	URL       string `toml:"url,omitempty"`        // https://... the panel is served at
+	Domain    string `toml:"domain,omitempty"`     // public: certificate name (public_url host)
+	ACMEEmail string `toml:"acme_email,omitempty"` // public: Let's Encrypt contact
+	Redirect  bool   `toml:"redirect,omitempty"`   // public: plain http :80 redirects to https
+}
+
+// PanelMode is the hub's panel access mode (loopback when unset).
+func (h *Hub) PanelMode() string {
+	if h == nil || h.PanelAccess == nil || h.PanelAccess.Mode == "" {
+		return PanelLoopback
+	}
+	return h.PanelAccess.Mode
+}
+
+// PanelURL is the direct panel URL, "" in loopback mode.
+func (h *Hub) PanelURL() string {
+	if h.PanelMode() == PanelLoopback {
+		return ""
+	}
+	return h.PanelAccess.URL
 }
 
 // Cloud records the firewall resources lazylongarm changed for a hub, so
@@ -195,6 +230,17 @@ func (c *Config) Validate() error {
 		}
 		if h.Address == "" {
 			return fmt.Errorf("hub %s: address is required", h.ID)
+		}
+		if pa := h.PanelAccess; pa != nil {
+			switch pa.Mode {
+			case PanelLoopback, PanelTailnet:
+			case PanelPublic:
+				if pa.Domain == "" {
+					return fmt.Errorf("hub %s: public panel access needs a domain", h.ID)
+				}
+			default:
+				return fmt.Errorf("hub %s: unknown panel access mode %q", h.ID, pa.Mode)
+			}
 		}
 	}
 	if c.DefaultHub != "" && !hubs[c.DefaultHub] {

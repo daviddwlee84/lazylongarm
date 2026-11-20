@@ -286,7 +286,17 @@ func (m *Model) togglePanel() tea.Cmd {
 		m.status = "panel tunnel closed"
 		return nil
 	}
-	if m.hub == nil || m.hub.SSHHost == "" || m.panelPending {
+	if m.hub == nil || m.panelPending {
+		return nil
+	}
+	if u := m.hub.PanelURL(); u != "" {
+		m.status = "panel: " + u + " (" + m.hub.PanelMode() + "; log in with a panel account + TOTP)"
+		if m.opts.OpenURL != nil {
+			_ = m.opts.OpenURL(u)
+		}
+		return nil
+	}
+	if m.hub.SSHHost == "" {
 		return nil
 	}
 	m.panelPending = true
@@ -790,8 +800,9 @@ func (m *Model) actions() []action {
 	case tabHub:
 		out = append(out,
 			action{"setup", map[bool]string{true: "rerun hub setup", false: "hub setup"}[hasHub], []string{"S"}, !m.toolBusy, func() tea.Cmd { return m.runTool("Hub setup", "hub", "setup") }},
-			action{"panel", map[bool]string{true: "close panel", false: "web panel"}[m.panel != nil], []string{"p"}, hasHub && m.hub.SSHHost != "" && !m.panelPending, func() tea.Cmd { return m.togglePanel() }},
+			action{"panel", map[bool]string{true: "close panel", false: "web panel"}[m.panel != nil], []string{"p"}, hasHub && (m.hub.SSHHost != "" || m.hub.PanelURL() != "") && !m.panelPending, func() tea.Cmd { return m.togglePanel() }},
 			action{"panel-user", "panel logins", []string{"U"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel login", "hub", "panel-user") }},
+			action{"panel-access", "panel access", []string{"A"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel access", "hub", "panel-access") }},
 		)
 	}
 	return out

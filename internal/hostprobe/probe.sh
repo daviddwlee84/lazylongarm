@@ -9,7 +9,7 @@ kv arch "$(uname -m 2>/dev/null)"
 kv kernel "$(uname -r 2>/dev/null)"
 if [ -r /etc/os-release ]; then
   . /etc/os-release 2>/dev/null
-  kv distro_id "${ID:-}"; kv distro_version "${VERSION_ID:-}"; kv distro_pretty "${PRETTY_NAME:-}"
+  kv distro_id "${ID:-}"; kv distro_version "${VERSION_ID:-}"; kv distro_codename "${VERSION_CODENAME:-}"; kv distro_pretty "${PRETTY_NAME:-}"
 elif has sw_vers; then
   kv distro_id macos; kv distro_version "$(sw_vers -productVersion 2>/dev/null)"; kv distro_pretty "macOS $(sw_vers -productVersion 2>/dev/null)"
 fi

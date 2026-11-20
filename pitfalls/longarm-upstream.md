@@ -13,3 +13,4 @@
 | 文件寫 `longarm_<v>_<arch>.deb`，release 上找不到 | 實際檔名是 `longarm-linux-amd64.deb` | 用 bare binary 資產名稱 |
 | `[tailnet]` 沒設，卻嘗試建立 Tailscale 節點 | provider 預設值看 OAuth secret／headscale 是否存在 | hub.toml 明確寫 `provider = "none"` |
 | `longarm worker add` 回 `NotFound: no user "mac" (longarm admin user add mac)` | bootstrap 的 admin code 產生的 admin 憑證帶有 `user: "mac"`，但 Hub 的使用者表（multi-tenancy）裡沒有這個 user；owned worker 需要真的 user 紀錄 | 是 admin 就改用 `longarm admin join-code --role worker --name N` + `longarm admin approve N`（`--mint admin`，預設）|
+| 設了 `https = ":443"` 後 longarm-hub 綁不到 port（依 unit 檔推斷）| 套件的 `longarm-hub.service` 以 `User=longarm-hub`、`NoNewPrivileges=yes` 執行，沒有 `CAP_NET_BIND_SERVICE` | `hub panel-access public` 寫入 drop-in `/etc/systemd/system/longarm-hub.service.d/lazylongarm-https.conf`（`AmbientCapabilities=CAP_NET_BIND_SERVICE`），切回 loopback 時移除 |

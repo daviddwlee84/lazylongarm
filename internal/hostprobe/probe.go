@@ -28,6 +28,7 @@ type Facts struct {
 	RawArch       string            `json:"raw_arch,omitempty"`
 	Distro        string            `json:"distro,omitempty"`
 	DistroID      string            `json:"distro_id,omitempty"`
+	DistroCode    string            `json:"distro_codename,omitempty"` // VERSION_CODENAME, e.g. jammy
 	User          string            `json:"user"`
 	UID           int               `json:"uid"`
 	Groups        []string          `json:"groups,omitempty"` // the user's Unix groups (id -Gn)
@@ -93,6 +94,8 @@ func Parse(out string) (*Facts, error) {
 			f.Distro = v
 		case k == "distro_id":
 			f.DistroID = v
+		case k == "distro_codename":
+			f.DistroCode = v
 		case k == "user":
 			f.User = v
 		case k == "uid":

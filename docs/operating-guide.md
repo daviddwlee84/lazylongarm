@@ -43,9 +43,11 @@ Requirements on the hub machine: Debian/Ubuntu with systemd, `sudo`, `curl`,
 
 Paths on the hub: `/etc/longarm-hub/hub.toml` (root:longarm-hub 0640, the
 previous file is backed up as `hub.toml.bak-*`), `/var/lib/longarm-hub`
-(0700 longarm-hub: `hub.db`, `ca/`, `bootstrap.env`). The panel is loopback
-only: `lazylongarm hub panel` (add `--create-user NAME` once for a password +
-TOTP login).
+(0700 longarm-hub: `hub.db`, `ca/`, `bootstrap.env`). The panel listens on
+loopback: `lazylongarm hub panel` (add `--create-user NAME` once for a password +
+TOTP login). `lazylongarm hub panel-access` can also put it on your tailnet or
+on public HTTPS ([Web panel](#web-panel)). Changing hub.toml on a rerun
+restarts the hub (`restart-hub` step).
 
 ### Recovering
 
@@ -126,7 +128,7 @@ run.
 |---|---|---|
 | 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
 | 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
-| 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel tunnel on/off · `U` panel login |
+| 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel (tunnel on/off, or the tailnet/public URL) · `U` panel login · `A` panel access |
 
 Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus details ·
 `r` refresh (auto every 5 s; `[tui] refresh_seconds`) · `?` help · `q` quit.
@@ -232,8 +234,8 @@ Claude next to the symlink).
 
 ## Web panel
 
-The hub's panel listens on 127.0.0.1:7480 on the hub host only and is served
-at `/`; without a login you only see the hub's front page.
+The hub's panel listens on 127.0.0.1:7480 on the hub host and is served at
+`/`; without a login you only see the hub's front page.
 
 - Dashboard, Hub tab: `p` opens a **background** tunnel (the dashboard stays
   usable; `p` again or quitting closes it) and your browser; `U` manages
@@ -245,6 +247,34 @@ at `/`; without a login you only see the hub's front page.
 - CLI: `lazylongarm hub panel` keeps the tunnel in the foreground until Ctrl+C
   and offers to create the first login.
 
+### Panel access: loopback, tailnet or public
+
+`lazylongarm hub panel-access [loopback|tailnet|public]` (or `A` on the Hub tab)
+adds one more way to reach the panel. The SSH tunnel keeps working in every
+mode, and each run is a reviewed, rerunnable plan; switching modes undoes the
+previous one.
+
+| Mode | Who can reach the login page | Protected by | What lazylongarm changes on the hub |
+|---|---|---|---|
+| `loopback` (default) | whoever can SSH to the hub | SSH key + password + TOTP | nothing (undoes the other modes) |
+| `tailnet` | devices on your tailnet | tailnet membership + password + TOTP | installs Tailscale from its apt repository (key `2596A99E…957F5868` verified), `tailscale up --accept-dns=false` (terminal handed over: open the printed URL, or `--auth-key-file`), `tailscale serve --bg --https=443 http://127.0.0.1:7480` |
+| `public` | the whole Internet | password (argon2id, per-IP failure limit) + TOTP | systemd drop-in `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `public_url` / `https = ":443"` / `https_redirect = ":80"` / `acme_email` in hub.toml, restart, NSG rules `lazylongarm-panel-https` (443/tcp) and `lazylongarm-panel-http` (80/tcp) |
+
+- **tailnet** needs MagicDNS and HTTPS Certificates switched on in the tailnet's
+  DNS settings. The URL is `https://<hub>.<tailnet>.ts.net/`; open it on any
+  device logged in to the tailnet (install Tailscale on your phone). Funnel is
+  never used. Going back to loopback stops `tailscale serve` but leaves
+  Tailscale installed and logged in (`sudo tailscale logout` if unwanted).
+- **public** needs a public hub whose DNS name (`--domain`, default: the hub
+  address) points at it. longarm-hub gets the certificate from Let's Encrypt
+  itself (TLS-ALPN-01 on 443; port 80 only serves the redirect, `--no-redirect`
+  keeps it closed); the check waits up to 2 minutes for it. `public_url` also
+  becomes the base URL of the hub's install scripts. Rerunning `hub setup` keeps
+  these settings. Sign-in with Google and others is not configured yet.
+- `hub status` adds a `panel-access` check (HTTPS answer and certificate days
+  left, or whether `tailscale serve` still proxies the panel), and `hub panel`
+  / `p` open the URL directly (`hub panel --tunnel` forces the tunnel).
+
 Ctrl+C during any terminal handoff from the dashboard (wizards, `hub panel`,
 `longarm logs -f`) ends only that command and returns to the dashboard.
 
@@ -254,5 +284,7 @@ The hub's CA key can mint certificates that run commands on every worker (as
 the user longarmd runs as). Treat the hub host as the fleet's root of trust:
 key-only SSH, as few other public services as possible, and only machines you
 are willing to expose to that host's compromise. lazylongarm keeps the panel
-on loopback, uses one-time 15-minute codes passed over stdin, verifies
-downloads against `SHA256SUMS`, and records only non-secret values.
+on loopback unless you choose `hub panel-access tailnet` (your tailnet only) or
+`public` (the login page on the Internet: password + TOTP are then the only
+barrier to an admin-level UI), uses one-time 15-minute codes passed over stdin,
+verifies downloads against `SHA256SUMS`, and records only non-secret values.

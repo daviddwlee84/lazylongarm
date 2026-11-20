@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `hub panel-access [loopback|tailnet|public]`: reach the web panel on your
+  tailnet (installs Tailscale from its apt repository with the signing key
+  pinned, hands the terminal to `tailscale up` for the login URL or takes
+  `--auth-key-file`, then `tailscale serve --bg --https=443`; never funnel) or
+  over public HTTPS (longarm-hub's built-in Let's Encrypt, a systemd drop-in
+  for binding 443/80, NSG rules); `loopback` undoes both. Dashboard Hub tab:
+  `A`; `p` and `hub panel` open the tailnet/public URL directly (`--tunnel`
+  forces the tunnel); `hub status` checks it.
+- `hub setup` restarts the hub when a rerun rewrites hub.toml (it used to keep
+  running with the old file) and keeps the panel access settings.
+- The host probe reports the distro codename.
 - `peer add [host] | --local`: `worker add` plus a client enrollment of the
   machine's own `longarm` (`<worker>-client`, client join code over ssh stdin),
   so herdr/ssh sessions on it can dispatch to the other workers. Upgrades an

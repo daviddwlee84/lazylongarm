@@ -55,6 +55,7 @@ bin/lazylongarm worker add     # wizard: pick an SSH host or this machine
 bin/lazylongarm peer add       # the same, and the machine's longarm can dispatch too
 bin/lazylongarm                # dashboard: Fleet · Jobs · Hub
 bin/lazylongarm hub panel      # Longarm's web panel through an SSH tunnel
+bin/lazylongarm hub panel-access tailnet   # optional: panel on your tailnet (or public HTTPS)
 ```
 
 Every mutating command builds a **plan** first. The Review screen shows the
@@ -68,7 +69,8 @@ is already in place; the journal lives in `$XDG_STATE_HOME/lazylongarm/ops/`.
 1. Adds the official apt repository (signing key fingerprint verified) and
    installs `longarm-hub` (user `longarm-hub`, `longarm-hub.service`).
 2. Writes `/etc/longarm-hub/hub.toml` (gRPC + relay on 7443/tcp+udp, STUN on
-   7444/udp, panel on 127.0.0.1:7480 only, `[tailnet] provider = "none"`).
+   7444/udp, panel on 127.0.0.1:7480, `[tailnet] provider = "none"`); a
+   rerun that changes it restarts the hub.
 3. Runs `longarm-hub bootstrap` **as the service user** (CA + one-time admin
    code), enables the service and waits for `/healthz`.
 4. Checks listeners (hub ports up, previously listening sockets untouched).
@@ -128,8 +130,9 @@ back with `longarm admin revoke <worker>-client`.
 | `lazylongarm` | dashboard (TTY); help otherwise |
 | `hub setup` | install/repair a hub (wizard, or `--host` + `--address`) |
 | `hub status` | service, healthz, reachability, NSG rules, enrollment |
-| `hub panel [--create-user NAME]` | tunnel to the loopback-only panel (offers to create the first login) |
+| `hub panel [--create-user NAME]` | tunnel to the loopback panel, or open its tailnet/public URL (offers to create the first login) |
 | `hub panel-user [NAME]` | create a web panel login (password + TOTP) |
+| `hub panel-access [loopback\|tailnet\|public]` | reach the panel over SSH only, on your tailnet (installs Tailscale, `tailscale serve`), or on public HTTPS (Let's Encrypt) |
 | `hub backup` | stop briefly, archive `/var/lib/longarm-hub` into the state dir (0600) |
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags; `--fetch auto\|push\|remote`) |

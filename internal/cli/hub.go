@@ -31,7 +31,7 @@ import (
 
 func hubCommand(o *options) *cobra.Command {
 	c := &cobra.Command{Use: "hub", Short: "Set up and inspect the longarm-hub you operate", Args: cobra.ArbitraryArgs, RunE: groupHelp}
-	c.AddCommand(hubSetupCommand(o), hubStatusCommand(o), hubPanelCommand(o), hubPanelUserCommand(o), hubBackupCommand(o), hubVMCommand(o))
+	c.AddCommand(hubSetupCommand(o), hubStatusCommand(o), hubPanelCommand(o), hubPanelUserCommand(o), hubPanelAccessCommand(o), hubBackupCommand(o), hubVMCommand(o))
 	return c
 }
 
@@ -221,6 +221,7 @@ func (o *options) finishHubSetup(cmd *cobra.Command, p *plan.Plan, f *hubSetupFl
 		fmt.Fprintf(out, "  lazylongarm worker add            # bootstrap a worker over SSH (or this machine)\n")
 		fmt.Fprintf(out, "  lazylongarm                       # dashboard: workers, jobs, hub\n")
 		fmt.Fprintf(out, "  lazylongarm hub panel             # open the web panel through an SSH tunnel\n")
+		fmt.Fprintf(out, "  lazylongarm hub panel-access      # optional: panel on your tailnet or public HTTPS\n")
 		fmt.Fprintf(out, "  longarm ls                        # Longarm's own view of the fleet\n")
 	}
 	return nil
@@ -414,13 +415,15 @@ func hubStatusCommand(o *options) *cobra.Command {
 func hubPanelCommand(o *options) *cobra.Command {
 	var hubID, createUser string
 	var port int
-	var noBrowser bool
+	var noBrowser, tunnel bool
 	c := &cobra.Command{
 		Use:   "panel",
-		Short: "Open the hub's web panel through an SSH tunnel (Ctrl+C closes it)",
-		Long: `The panel listens on loopback on the hub host only. This opens an app-owned
+		Short: "Open the hub's web panel (SSH tunnel, or its tailnet/public URL)",
+		Long: `The panel listens on loopback on the hub host. This opens an app-owned
 ssh -L tunnel to it, prints the URL and opens a browser; the tunnel lives
-until Ctrl+C. --create-user adds a panel login (password + TOTP) first.`,
+until Ctrl+C. When ` + "`hub panel-access`" + ` put the panel on your tailnet or on
+public HTTPS, it opens that URL instead (--tunnel forces the tunnel).
+--create-user adds a panel login (password + TOTP) first.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			h, err := o.requireHub(hubID)
@@ -444,6 +447,13 @@ until Ctrl+C. --create-user adds a panel login (password + TOTP) first.`,
 					return err
 				}
 			}
+			if u := h.PanelURL(); u != "" && !tunnel {
+				fmt.Fprintf(cmd.OutOrStdout(), "panel: %s  (%s; log in with a panel account + TOTP; --tunnel for the SSH tunnel)\n", u, h.PanelMode())
+				if !noBrowser {
+					_ = openBrowser(u)
+				}
+				return nil
+			}
 			t, err := connection.OpenTunnel(cmd.Context(), h.SSHHost, port, orDefault(h.Panel, "127.0.0.1:7480"))
 			if err != nil {
 				return err
@@ -465,6 +475,7 @@ until Ctrl+C. --create-user adds a panel login (password + TOTP) first.`,
 	c.Flags().StringVar(&hubID, "hub", "", "hub id")
 	c.Flags().IntVar(&port, "port", 7480, "local port (0 = any)")
 	c.Flags().BoolVar(&noBrowser, "no-browser", false, "only print the URL")
+	c.Flags().BoolVar(&tunnel, "tunnel", false, "use the SSH tunnel even when the panel has a tailnet/public URL")
 	c.Flags().StringVar(&createUser, "create-user", "", "create a panel account first (asks for a password; prints the TOTP secret once)")
 	return c
 }

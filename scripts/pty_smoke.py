@@ -67,6 +67,7 @@ esac
 PROBE = """os=Linux
 arch=x86_64
 distro_id=ubuntu
+distro_codename=jammy
 distro_pretty=Ubuntu 22.04.2 LTS
 user=david
 home=/home/david
@@ -275,6 +276,29 @@ def companion_remotes_cancel(env, log):
     print("companion remotes (picker/review/cancel, nothing applied): ok")
 
 
+def panel_access_cancel(env, log):
+    """panel-access: the wizard opens; the tailnet Review shows tailscale
+    serve; canceling there installs and logs in nothing."""
+    log.write_text("")
+    t = Terminal(["hub", "panel-access"], env)
+    t.wait("Web panel access")
+    assert "SSH tunnel only" in t.text(), t.text()
+    t.send("\x03")
+    assert t.exit_code() == 130
+    t = Terminal(["hub", "panel-access", "tailnet"], env)
+    t.wait("Review")
+    for _ in range(30):
+        t.send("j")  # scroll the plan
+    t.wait("tailscale serve --bg --https=443")
+    t.send("\x03")
+    code = t.exit_code()
+    assert code == 130, f"canceled review exit {code}\n{t.text()}"
+    calls = log.read_text()
+    for marker in ("noarmor.gpg", "apt-get install", "tailscale up", "tailscale serve --bg"):
+        assert marker not in calls, f"canceled panel-access ran an apply step ({marker})"
+    print("hub panel-access (wizard/review/cancel, nothing applied): ok")
+
+
 def narrow(env):
     t = Terminal([], env, cols=64, rows=18)
     t.wait("worker-1")
@@ -295,6 +319,7 @@ def main():
         wizard_cancel(env, root / "fake.log")
         ctrl_c_in_handoff(env, root)
         companion_remotes_cancel(env, root / "fake.log")
+        panel_access_cancel(env, root / "fake.log")
         narrow(env)
 
 

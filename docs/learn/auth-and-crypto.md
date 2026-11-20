@@ -121,9 +121,21 @@ The panel is a web page for people. It uses an account, a password and
 4. The phone's and the hub's clocks must be roughly right; a large skew makes
    every check fail.
 
-**Why the panel binds to 127.0.0.1 only**: nobody on the network can reach it;
-you first open an SSH tunnel (with your SSH key). So the panel is effectively
-protected by three layers: SSH key, password and TOTP.
+**Why the panel binds to 127.0.0.1**: nobody on the network can reach it;
+you first open an SSH tunnel (with your SSH key). So by default the panel is
+effectively protected by three layers: SSH key, password and TOTP.
+
+`lazylongarm hub panel-access` trades the first layer for convenience:
+
+| Mode | First layer | What an attacker must get past |
+|---|---|---|
+| `loopback` | your SSH key | SSH key, password, TOTP |
+| `tailnet` | membership of your tailnet (`tailscale serve`, HTTPS with a `*.ts.net` certificate) | your tailnet account, password, TOTP |
+| `public` | none: the login page is on the Internet (HTTPS, Let's Encrypt) | password and TOTP; longarm-hub limits failed logins per IP, hashes passwords with argon2id and uses `HttpOnly`, `Secure`, `SameSite=Strict` session cookies |
+
+In public mode a pre-authentication bug in the panel would also be reachable
+by everyone, which is why the tailnet is the recommended way to open the
+panel from a phone.
 
 ## 5. The trust lazylongarm itself relies on (SSH and software sources)
 
@@ -132,7 +144,7 @@ protected by three layers: SSH key, password and TOTP.
 | SSH to the VM | The host key must be confirmed on first connect. Preferably fetch its fingerprint first with `az vm run-command` (through Azure's own channel, not SSH) and compare it with the `SHA256:…` ssh shows: compare first, then trust, rather than blind TOFU |
 | Logging in to the VM | An SSH key (`~/.ssh/id_ed25519`); password login is disabled |
 | sudo | `sudo -n` is tried in the background first; when a password is needed the terminal is handed to you and lazylongarm never sees it |
-| apt packages | After downloading Longarm's apt signing key, its fingerprint `CA72074C…5307` is compared before it is trusted; apt then verifies the repository's signatures with it |
+| apt packages | After downloading Longarm's apt signing key, its fingerprint `CA72074C…5307` is compared before it is trusted; apt then verifies the repository's signatures with it. `hub panel-access tailnet` does the same for Tailscale's key (`2596A99E…957F5868`) |
 | Worker binaries | Downloaded from the GitHub release and checked against the same release's `SHA256SUMS` (minisign signature checks are not done yet; see TODO) |
 | Reading the hub CA fingerprint | Read with `longarm-hub ca show` over the already-verified SSH connection, so the fingerprint is trustworthy |
 
@@ -149,7 +161,7 @@ guarantees after it weaken.
 | A worker's private key | `~/.longarm/tls/` on each worker | Someone can impersonate that worker (and receive other people's jobs) | Revoke the worker and enroll it again |
 | Join code | exists only during the 15 minutes of joining | Usable to join within its lifetime, but `auto_approve = false` still requires admin approval | Short lifetime, single use, passed over stdin |
 | TOTP secret | the hub's database and your phone | Together with the password, someone can log in to the panel | Never paste it into chats or logs; reset it if it leaks |
-| Panel password | your memory or a password manager | Still needs TOTP and SSH to log in | Use a password manager |
+| Panel password | your memory or a password manager | Still needs TOTP and SSH (or the tailnet) to log in; with public panel access only TOTP remains | Use a password manager |
 | SSH private key | `~/.ssh/` on your laptop | Someone can log in to the machines (lazylongarm's management channel) | Add a passphrase; use an agent |
 
 **Who jobs run as on a worker**: longarmd's service account (a normal user, not

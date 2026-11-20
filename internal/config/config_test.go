@@ -401,3 +401,32 @@ func TestInvalidConfigStillFails(t *testing.T) {
 		}
 	}
 }
+
+func TestPanelAccessRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	c, _ := Load(path, false)
+	c.UpsertHub(Hub{ID: "h", Mode: ModePublic, Address: "hub.example.com:7443"})
+	if got := c.Hubs[0].PanelMode(); got != PanelLoopback {
+		t.Fatalf("default panel mode %q", got)
+	}
+	c.Hubs[0].PanelAccess = &PanelAccess{Mode: PanelPublic, URL: "https://hub.example.com/", Domain: "hub.example.com", Redirect: true}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := loaded.Hubs[0]
+	if h.PanelMode() != PanelPublic || h.PanelURL() != "https://hub.example.com/" || !h.PanelAccess.Redirect {
+		t.Fatalf("%+v", h.PanelAccess)
+	}
+	loaded.Hubs[0].PanelAccess = &PanelAccess{Mode: PanelPublic}
+	if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "domain") {
+		t.Fatalf("public without domain accepted: %v", err)
+	}
+	loaded.Hubs[0].PanelAccess = &PanelAccess{Mode: "funnel"}
+	if err := loaded.Validate(); err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+}
