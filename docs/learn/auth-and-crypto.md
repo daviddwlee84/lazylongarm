@@ -1,165 +1,210 @@
-# 學習筆記：這套 fleet 的加密與身分驗證是怎麼運作的
+# Learning notes: how this fleet's crypto and identity work
 
-> 撰寫：2026-11-20，Longarm v0.1.42。範例用一個假想的 fleet：Hub `hub.example.com`、worker `worker-1`、admin client `laptop`。
-> 標「依文件」的內容出自 Longarm 官方文件或原始碼；標「推論」的是根據行為推出來的。
+> Written 2026-11-20 against Longarm v0.1.42. Examples use an imaginary fleet:
+> hub `hub.example.com`, worker `worker-1`, admin client `laptop`.
+> "Per the docs" marks content from Longarm's documentation or source code;
+> "inferred" marks conclusions drawn from observed behavior.
 
-## 一句話版本
+## The one-sentence version
 
-**Hub 是一個私人的憑證機構（CA）**。每台機器加入時，自己在本機產生私鑰，再用一次性的
-join code 換到一張由 Hub 簽發的憑證。之後機器之間一律用 **mTLS**（雙方都出示憑證）互相確認
-身分並加密。**人**登入 Web Panel 則是另一套：密碼加 TOTP（兩步驟驗證）。而
-**lazylongarm 管理這些機器靠的是 SSH**，又是第三套信任。
+**The hub is a private certificate authority (CA).** Each machine generates its
+own private key locally when it joins, then trades a one-time join code for a
+certificate signed by the hub. From then on machines confirm each other's
+identity and encrypt traffic with **mTLS** (both sides present a certificate).
+**People** log in to the web panel through a different scheme: a password plus
+TOTP (two-factor). And **lazylongarm manages the machines over SSH**, a third,
+separate trust relationship.
 
 ```
-            你（人）
-   ┌──────────┼─────────────────────────┐
-   │ SSH key  │ 密碼 + TOTP              │ 你的 admin 憑證（mTLS）
-   ▼          ▼                         ▼
- 各台機器   Web Panel（只在 127.0.0.1）   longarm CLI ──mTLS──► Hub ◄──mTLS── 各 worker
- (setup/    經 SSH tunnel 存取                    └──── mTLS（可直連，或經 Hub relay）────► worker
-  修復用)
+              you (a person)
+   ┌──────────┼──────────────────────────────┐
+   │ SSH key  │ password + TOTP               │ your admin certificate (mTLS)
+   ▼          ▼                              ▼
+ machines   web panel (127.0.0.1 only)     longarm CLI ──mTLS──► hub ◄──mTLS── workers
+ (setup /   reached through an SSH tunnel         └──── mTLS (direct, or via the hub relay) ────► worker
+  repair)
 ```
 
-## 1. 基本名詞（先懂這幾個就夠）
+## 1. Basic terms (these are enough to follow the rest)
 
-| 名詞 | 白話 | 在這套系統裡 |
+| Term | Plain meaning | In this system |
 |---|---|---|
-| 公鑰／私鑰 | 一對鑰匙：私鑰自己藏好，公鑰可以公開；私鑰簽的東西，任何人都能用公鑰驗證 | 每台機器、Hub 的 CA、你的 SSH 都各有一對 |
-| 憑證（certificate） | 「某人擔保：這把公鑰屬於某某」的簽名文件，有效期限、用途（角色）都寫在裡面 | Hub 簽給每台機器的「通行證」 |
-| CA（憑證機構） | 負責簽發憑證的那個人；大家信任它，就等於信任它簽出來的憑證 | Hub 自己就是 CA（`/var/lib/longarm-hub/ca/`） |
-| fingerprint（指紋） | 一把鑰匙或一張憑證的 SHA-256 摘要，短到可以人工比對 | Hub CA 的指紋，例如 `3f9a…c2e1` |
-| TLS | HTTPS 用的加密協定：先驗證對方身分，再建立加密通道 | 所有 Longarm 連線的基礎 |
-| mTLS（mutual TLS） | 一般 HTTPS 只有伺服器出示憑證；mTLS 是**雙方都出示**，互相驗證 | Hub、client、worker 之間全部用 mTLS |
-| TOFU | Trust On First Use：第一次連線時「先信任再說」，之後記住 | SSH 的 host key、`--ca-fingerprint` 就是為了把 TOFU 變成「先比對再信任」 |
+| Public / private key | A key pair: keep the private key secret, publish the public key; anything signed with the private key can be verified by anyone with the public key | Every machine, the hub's CA and your SSH identity each have one |
+| Certificate | A signed statement that "this public key belongs to so-and-so", including validity period and purpose (role) | The "pass" the hub signs for each machine |
+| CA (certificate authority) | Whoever signs certificates; trusting it means trusting what it signs | The hub itself is the CA (`/var/lib/longarm-hub/ca/`) |
+| Fingerprint | A SHA-256 digest of a key or certificate, short enough to compare by eye | The hub CA fingerprint, e.g. `3f9a…c2e1` |
+| TLS | The protocol behind HTTPS: verify the other side's identity, then set up an encrypted channel | The basis of every Longarm connection |
+| mTLS (mutual TLS) | Ordinary HTTPS only has the server present a certificate; mTLS has **both sides** present one and verify each other | Used between hub, clients and workers everywhere |
+| TOFU | Trust On First Use: trust whatever answers the first time, then remember it | SSH host keys and `--ca-fingerprint` exist to turn TOFU into "compare first, then trust" |
 
-## 2. 一台機器怎麼加入 fleet（enrollment）
+## 2. How a machine joins the fleet (enrollment)
 
-以 `worker-1` 為例，對照 `lazylongarm worker add` 的輸出：
+Using `worker-1` and the output of `lazylongarm worker add`:
 
-1. **Admin 產生一次性 join code**（`longarm admin join-code --role worker --name worker-1 --ttl 15m`）。
-   - 依文件：code 是 6 個字元、單次使用、有期限（這裡設 15 分鐘）。Hub 的資料庫裡只存它的雜湊值。
-   - code 只是「入場券」，本身不是憑證，也不能拿來執行任何指令。
-2. **worker 在本機產生私鑰**（依文件：「The key is generated here; the hub signs a certificate」）。
-   私鑰**從頭到尾不會離開 worker**。
-3. **worker 先驗證 Hub 是不是真的 Hub**：用 `--ca-fingerprint 3f9a…` 比對 Hub 出示的
-   CA 憑證指紋，對不上就拒絕。輸出裡的 `hub CA verified (3f9a…)` 就是這一步。
-   這可以防止有人冒充 Hub 騙走 join code（中間人攻擊）。
-4. **用 join code 換憑證**：worker 送出公鑰加 code，Hub 驗證 code 後，用 CA 私鑰簽一張憑證給它，
-   上面寫著名字（worker-1）、角色（worker）、有效期限。
-5. **等待核准**：`auto_approve = false`，所以新 worker 先是 `pending`；lazylongarm 以 admin 身分立刻
-   `longarm admin approve worker-1`。這一步是第二道關卡：就算 code 外洩，陌生機器也要有人核准。
-6. 之後 worker 用這張憑證和 Hub 建立 mTLS 連線，開始回報狀態、接 job。
+1. **An admin creates a one-time join code**
+   (`longarm admin join-code --role worker --name worker-1 --ttl 15m`).
+   - Per the docs: the code is 6 characters, single-use and time-limited (15
+     minutes here). The hub's database stores only its hash.
+   - The code is just an admission ticket. It is not a certificate and cannot
+     run anything.
+2. **The worker generates its private key locally** (per the docs: "The key is
+   generated here; the hub signs a certificate"). The private key **never
+   leaves the worker**.
+3. **The worker first checks that the hub is the real hub**: it compares the
+   hub's CA certificate with `--ca-fingerprint 3f9a…` and refuses on a
+   mismatch. The `hub CA verified (3f9a…)` line in the output is this step. It
+   stops an impostor hub from harvesting the join code (a man-in-the-middle
+   attack).
+4. **The code is traded for a certificate**: the worker sends its public key and
+   the code; the hub checks the code and signs a certificate with its CA key,
+   carrying the name (worker-1), the role (worker) and an expiry.
+5. **Approval**: with `auto_approve = false` a new worker starts as `pending`;
+   lazylongarm, acting as admin, immediately runs
+   `longarm admin approve worker-1`. This is a second gate: even a leaked code
+   does not let an unknown machine in without someone approving it.
+6. From then on the worker uses the certificate to hold an mTLS connection to
+   the hub, report its state and accept jobs.
 
-憑證期限（`hub.toml` 的 `[certs]`）：worker 90 天、client／admin 30 天，到期前會自動續簽。
-`whoami` 裡的 `renew_before: 864000s` 就是到期前 10 天開始續簽。
+Certificate lifetimes (`[certs]` in `hub.toml`): 90 days for workers, 30 days
+for clients and admins, renewed automatically before expiry. The
+`renew_before: 864000s` in `whoami` means renewal starts 10 days before expiry.
 
-**lazylongarm 額外做的保護**：join code 經 **ssh stdin** 傳給 worker（`read -r code`），不會出現在
-Review 畫面、log、設定檔，也不會留在遠端的 shell history 裡。
+**Extra protection from lazylongarm**: the join code reaches the worker over
+**ssh stdin** (`read -r code`). It never appears on the Review screen, in logs or
+in the config file, and it does not land in the remote shell history.
 
-## 3. 連線時發生什麼事（mTLS）
+## 3. What happens on a connection (mTLS)
 
 ```
-client (laptop)                           worker (worker-1)
-  出示：laptop 的憑證（admin, 由 Hub CA 簽） 出示：worker-1 的憑證（worker, 由 Hub CA 簽）
-  檢查：對方憑證是 Hub CA 簽的嗎？名字對嗎？   檢查：對方憑證是 Hub CA 簽的嗎？角色有權限嗎？
-            └──────────── 雙方都通過 → 建立加密通道 ────────────┘
+client (laptop)                                  worker (worker-1)
+  presents: laptop's certificate (admin, by hub CA)  presents: worker-1's certificate (worker, by hub CA)
+  checks: signed by the hub CA? right name?          checks: signed by the hub CA? does the role allow it?
+              └──────────── both pass → encrypted channel ────────────┘
 ```
 
-- **路徑可以是直連**（例如 tailnet 上的 `tcp://100.x.y.z:7701`，或 QUIC 打洞成功的
-  `longnet/direct`），**也可以經 Hub relay**（打不了洞時）。
-- **經過 relay 時，Hub 讀不到內容**：client 和 worker 之間的 mTLS 是端到端的，relay 只是轉送加密後的 bytes。
-  這就是「TLS 裡面再包一層 TLS」（TLS-in-TLS）：外層是到 relay 的 TLS，內層是端到端的 mTLS。
-  它保護了隱私，但這種「TLS 裡面再包 TLS」的流量型態也比較容易被深度封包檢測辨識出來；
-  所以不要把 Hub 和需要低調的服務放在同一個 IP 上。
-- **Hub 掌握的是「誰可以加入」**，不是「每次連線的內容」。Hub 掛掉時，已經在跑的 job 不受影響
-  （依文件：控制面和資料面分離）。
+- **The path can be direct** (for example `tcp://100.x.y.z:7701` on a tailnet,
+  or `longnet/direct` after a successful QUIC hole punch) **or go through the
+  hub relay** (when hole punching fails).
+- **Through the relay, the hub cannot read the content**: the mTLS session
+  between client and worker is end to end; the relay only forwards encrypted
+  bytes. This is TLS inside TLS: the outer TLS goes to the relay, the inner mTLS
+  runs end to end. It protects privacy, but this traffic shape is also easier to
+  recognize with deep packet inspection, so keep the hub on its own host rather
+  than sharing an IP with unrelated services.
+- **The hub controls who may join**, not the content of each connection. If the
+  hub goes down, jobs that are already running are unaffected (per the docs:
+  the control plane and data plane are separate).
 
-## 4. 人怎麼登入 Web Panel（密碼 + TOTP）
+## 4. How people log in to the web panel (password + TOTP)
 
-Panel 是給人用的網頁，用的不是機器憑證，而是帳號、密碼加 **TOTP**：
+The panel is a web page for people. It uses an account, a password and
+**TOTP** rather than machine certificates:
 
-| 因素 | 你「知道」或「擁有」的東西 | 存在哪 |
+| Factor | Something you know or have | Stored where |
 |---|---|---|
-| 密碼 | 你知道的 | Hub 資料庫只存雜湊（推論：一般做法，不存明文） |
-| TOTP code | 你擁有的（手機上的 authenticator app） | 種子（secret）存在 Hub 和你的手機 |
+| Password | something you know | the hub's database keeps only a hash (inferred: the usual practice, no plaintext) |
+| TOTP code | something you have (an authenticator app on your phone) | the seed (secret) is on the hub and on your phone |
 
-**TOTP 的原理（RFC 6238）**：
-1. 建立帳號時，Hub 隨機產生一個 secret（形如 `JBSWY3DPEHPK3PXP…` 的一串 Base32），用 QR code（`otpauth://` URI）交給你的 app。
-2. 之後 Hub 和 app **各自**用「secret + 目前時間（每 30 秒一格）」算 HMAC，取 6 位數。
-   兩邊算出一樣的數字，就代表你手上真的有那個 secret。
-3. 所以 6 位數每 30 秒換一次，**secret 本身則固定不變**（直到你重設帳號）。
-   - secret 外洩 = 別人也能算出你的 6 位數 → 要重設（`hub panel-user NAME --reset`）。
-   - 某一次的 6 位數外洩影響很小，30 秒後就失效。
-4. 手機和 Hub 的時間要大致準確，誤差太大就會一直驗證失敗。
+**How TOTP works (RFC 6238)**:
 
-**Panel 為什麼只綁 127.0.0.1**：網路上的人連不到它，你要先通過 SSH（你的 SSH key）建立 tunnel 才能存取。
-所以 Panel 其實受「SSH key + 密碼 + TOTP」三層保護。
+1. When the account is created, the hub generates a random secret (a Base32
+   string like `JBSWY3DPEHPK3PXP…`) and hands it to your app as a QR code (an
+   `otpauth://` URI).
+2. From then on the hub and the app **each** compute an HMAC of "secret +
+   current time (in 30-second steps)" and take 6 digits. Matching numbers prove
+   you hold the secret.
+3. So the 6 digits change every 30 seconds while **the secret stays the same**
+   (until you reset the account).
+   - A leaked secret means someone else can compute your codes → reset it
+     (`hub panel-user NAME --reset`).
+   - A single leaked 6-digit code matters little; it expires within 30 seconds.
+4. The phone's and the hub's clocks must be roughly right; a large skew makes
+   every check fail.
 
-## 5. lazylongarm 自己用到的信任（SSH 與軟體來源）
+**Why the panel binds to 127.0.0.1 only**: nobody on the network can reach it;
+you first open an SSH tunnel (with your SSH key). So the panel is effectively
+protected by three layers: SSH key, password and TOTP.
 
-| 環節 | 怎麼確保沒被冒充 |
+## 5. The trust lazylongarm itself relies on (SSH and software sources)
+
+| Link | How impersonation is ruled out |
 |---|---|
-| 連到 VM 的 SSH | 第一次連線要確認 host key。建議先用 `az vm run-command`，透過 Azure 自己的通道（不走 SSH）拿到 fingerprint，再和 ssh 顯示的 `SHA256:…` 比對：「先比對再信任」，不是盲目 TOFU |
-| 登入 VM | SSH key（`~/.ssh/id_ed25519`），密碼登入是關的 |
-| sudo | 背景先試 `sudo -n`；需要密碼時把終端交給你輸入，lazylongarm 不經手 |
-| apt 套件 | 下載 Longarm 的 apt 簽章金鑰後，先比對 fingerprint `CA72074C…5307` 再信任；apt 再用它驗證 repository 的簽章 |
-| worker 的 binary | 從 GitHub release 下載，並用同一個 release 的 `SHA256SUMS` 驗證（還沒做 minisign 簽章驗證，見 TODO） |
-| 從 Hub 讀 CA fingerprint | 經過已驗證的 SSH 讀 `longarm-hub ca show`，所以這個 fingerprint 是可信的 |
+| SSH to the VM | The host key must be confirmed on first connect. Preferably fetch its fingerprint first with `az vm run-command` (through Azure's own channel, not SSH) and compare it with the `SHA256:…` ssh shows: compare first, then trust, rather than blind TOFU |
+| Logging in to the VM | An SSH key (`~/.ssh/id_ed25519`); password login is disabled |
+| sudo | `sudo -n` is tried in the background first; when a password is needed the terminal is handed to you and lazylongarm never sees it |
+| apt packages | After downloading Longarm's apt signing key, its fingerprint `CA72074C…5307` is compared before it is trusted; apt then verifies the repository's signatures with it |
+| Worker binaries | Downloaded from the GitHub release and checked against the same release's `SHA256SUMS` (minisign signature checks are not done yet; see TODO) |
+| Reading the hub CA fingerprint | Read with `longarm-hub ca show` over the already-verified SSH connection, so the fingerprint is trustworthy |
 
-這條**信任鏈**是：Azure 帳號 → VM 的 host key → SSH → Hub CA fingerprint → 每一張機器憑證。
-任何一環沒驗證，後面的保證就會打折扣。
+The **chain of trust** is: Azure account → the VM's host key → SSH → the hub CA
+fingerprint → every machine certificate. Skip verifying any link and the
+guarantees after it weaken.
 
-## 6. 哪些東西最需要保護（被偷了會怎樣）
+## 6. What needs the most protection (and what happens if it is stolen)
 
-| 秘密 | 放在哪 | 被偷了 | 對策 |
+| Secret | Where it lives | If stolen | Mitigation |
 |---|---|---|---|
-| **Hub CA 私鑰** | Hub VM `/var/lib/longarm-hub/ca/ca.key`（只有 longarm-hub 使用者可讀） | **最嚴重**：能簽出任何角色的憑證 → 在所有 worker 上以 longarmd 的身分執行指令 | Hub 放在只跑 Hub 的專用 VM、`hub backup` 加密後離線保存 |
-| 你的 admin 憑證和私鑰 | Mac `~/.config/longarm/tls/` | 對方能以 admin 身分管理 fleet，直到憑證被撤銷或過期（30 天） | `longarm admin revoke`；日常可以另開非 admin 的 client |
-| worker 的私鑰 | 各 worker 的 `~/.longarm/tls/` | 能冒充那台 worker（接到別人的 job） | 撤銷那台 worker、重新加入 |
-| join code | 只在加入的那 15 分鐘內存在 | 有效期內可以拿去加入，但 `auto_approve = false` 還要 admin 核准 | 短期限、單次使用、經 stdin 傳 |
-| TOTP secret | Hub 資料庫加你的手機 | 加上密碼就能登入 Panel | 不要貼到聊天或 log；外洩就重設 |
-| Panel 密碼 | 你的腦袋或密碼管理器 | 加上 TOTP 和 SSH 才能登入 | 用密碼管理器 |
-| SSH 私鑰 | Mac `~/.ssh/` | 能登入各機器（這是 lazylongarm 管理的通道） | 加 passphrase、用 agent |
+| **Hub CA private key** | the hub VM's `/var/lib/longarm-hub/ca/ca.key` (readable only by the longarm-hub user) | **Worst case**: certificates for any role can be signed → commands run as longarmd on every worker | Run the hub on a dedicated VM that only runs the hub; keep an encrypted `hub backup` offline |
+| Your admin certificate and key | `~/.config/longarm/tls/` on your laptop | Someone can manage the fleet as admin until the certificate is revoked or expires (30 days) | `longarm admin revoke`; use a separate non-admin client day to day |
+| A worker's private key | `~/.longarm/tls/` on each worker | Someone can impersonate that worker (and receive other people's jobs) | Revoke the worker and enroll it again |
+| Join code | exists only during the 15 minutes of joining | Usable to join within its lifetime, but `auto_approve = false` still requires admin approval | Short lifetime, single use, passed over stdin |
+| TOTP secret | the hub's database and your phone | Together with the password, someone can log in to the panel | Never paste it into chats or logs; reset it if it leaks |
+| Panel password | your memory or a password manager | Still needs TOTP and SSH to log in | Use a password manager |
+| SSH private key | `~/.ssh/` on your laptop | Someone can log in to the machines (lazylongarm's management channel) | Add a passphrase; use an agent |
 
-**worker 上的 job 以誰的身分執行**：以 longarmd 的服務帳號執行（一般使用者帳號，
-不是 root）。所以 fleet 被攻破的影響範圍，是那個帳號能碰到的一切：SSH key、
-git 憑證、資料。這也是「體驗期只加不敏感機器」的原因。macOS worker 沒有 per-user isolation。
+**Who jobs run as on a worker**: longarmd's service account (a normal user, not
+root). So the blast radius of a compromised fleet is everything that account
+can reach: SSH keys, git credentials, data. That is why only non-sensitive
+machines should join during a trial. macOS workers have no per-user isolation.
 
-## 7. 洩露或遺失時怎麼重設（靠的是哪一台的權限）
+## 7. Resetting after a leak or loss (and whose permissions that takes)
 
-有**兩條獨立的管理路徑**，彼此可以互相救援：
+There are **two independent management paths** that can rescue each other:
 
-| 路徑 | 需要什麼 | 能做什麼 |
+| Path | What it needs | What it can do |
 |---|---|---|
-| **A. admin 憑證** | 你的 Mac 上的 `~/.config/longarm`（`mac (admin)`） | `longarm admin approve/revoke/join-code`、`longarm worker remove`：日常管理 |
-| **B. Hub 主機的 SSH 加 sudo** | `~/.ssh/id_ed25519` 加 VM 的 sudo（Azure 帳號還能用 `az vm run-command` 當最後手段） | `longarm-hub …`：建立或重設 Panel 帳號、**產生新的 admin join code**、讀 CA、備份。這是緊急時的 break-glass 路徑 |
+| **A. Admin certificate** | `~/.config/longarm` on your laptop (`laptop (admin)`) | `longarm admin approve/revoke/join-code`, `longarm worker remove`: day-to-day management |
+| **B. SSH plus sudo on the hub host** | `~/.ssh/id_ed25519` and sudo on the VM (the Azure account can fall back to `az vm run-command`) | `longarm-hub …`: create or reset panel accounts, **mint a new admin join code**, read the CA, back up. This is the break-glass path |
 
-| 外洩或遺失的東西 | 怎麼處理 | 用哪條路徑 |
+| Leaked or lost | What to do | Path |
 |---|---|---|
-| TOTP secret 或 Panel 密碼 | `lazylongarm hub panel-user NAME --reset`（新密碼加新 secret，舊的立刻失效），也可以在 dashboard 按 `U` 選 reset | B |
-| 某台 worker 的私鑰 | `longarm admin revoke <worker>`（依文件：worker 在一次 heartbeat 內就會拒絕舊憑證），再 `lazylongarm worker add <host> --reenroll` 重新加入 | A，重新加入時加上 SSH |
-| 你的 Mac（admin 憑證）遺失或外洩 | 在 Hub 主機產生新的 admin code（`longarm-hub join-code --role admin`），用另一台機器加入成為新的 admin，再 `longarm admin revoke mac` | **B**：不需要舊的 admin 憑證，所以 Mac 丟了也救得回來 |
-| join code | 15 分鐘後失效、只能用一次，而且還要 admin 核准；`longarm admin join-codes` 可以列出最近的 code（不顯示 code 本身） | — |
-| **Hub CA 私鑰** | 最糟的情況：所有憑證都不能再信任，要換一把新 CA，所有機器重新加入（`hub setup` 加上每台 `worker add --reenroll`） | B 加上每台的 SSH |
-| SSH 私鑰 | 不屬於 Longarm 的範圍：換一把 key，更新各機器的 `authorized_keys`；Azure VM 可以用 `az vm user update` 重設 | Azure 帳號 |
+| TOTP secret or panel password | `lazylongarm hub panel-user NAME --reset` (new password and secret; the old ones stop working at once), or `U` → reset in the dashboard | B |
+| A worker's private key | `longarm admin revoke <worker>` (per the docs: the worker rejects the old certificate within one heartbeat), then `lazylongarm worker add <host> --reenroll` | A, plus SSH to re-enroll |
+| Your laptop (admin certificate) lost or leaked | On the hub host, mint a new admin code (`longarm-hub join-code --role admin`), enroll another machine as the new admin, then `longarm admin revoke laptop` | **B**: no old admin certificate needed, so a lost laptop is recoverable |
+| A join code | Expires after 15 minutes, works once, and still needs admin approval; `longarm admin join-codes` lists recent codes (without the codes themselves) | — |
+| **The hub CA private key** | Worst case: no certificate can be trusted any more; create a new CA and re-enroll every machine (`hub setup`, then `worker add --reenroll` on each) | B, plus SSH to every machine |
+| An SSH private key | Outside Longarm: replace the key and update `authorized_keys` on each machine; on Azure VMs `az vm user update` can reset it | Azure account |
 
-由此可見：**Hub 主機的 SSH／sudo 加上 Azure 帳號，才是真正的最高權限**；admin 憑證是日常方便用的。
-所以要保護好 `~/.ssh` 和 Azure 帳號（開 MFA），並跑一次 `lazylongarm hub backup`，
-把備份加密後離線保存，萬一 VM 壞掉才能還原 CA。
+So **SSH/sudo on the hub host plus the Azure account are the real top-level
+privileges**; the admin certificate is a day-to-day convenience. Protect `~/.ssh`
+and the Azure account (enable MFA), and run `lazylongarm hub backup` once,
+keeping the backup encrypted and offline so the CA can be restored if the VM
+dies.
 
-## 8. 常見問題
+## 8. Common questions
 
-- **mTLS 已經加密了，為什麼還要 SSH？** 用途不同：mTLS 是 Longarm 機器之間的日常通道；
-  SSH 是 lazylongarm 用來**安裝和修復**機器的管理通道（Longarm 本身沒有遠端安裝功能）。
-- **Tailscale（WireGuard）和 mTLS 重複嗎？** 這次 worker 直連走的是 tailnet，所以有兩層加密
-  （外層 WireGuard、內層 mTLS），多一層無妨；Longarm 不依賴 Tailscale，換成普通 TCP 也一樣安全。
-- **Hub 看得到我的程式碼或 job 輸出嗎？** 經 relay 時看不到（端到端 mTLS）；但 Hub 知道有哪些機器、
-  哪些 job（metadata），而 Hub 的管理者可以簽憑證，所以「信任 Hub 的主人」仍然是前提。
-- **自簽 CA 安全嗎？** 安全與否不在於 CA 是不是公開機構，而在於大家有沒有正確比對 fingerprint、
-  CA 私鑰有沒有保護好。公開 CA 適合「陌生人互相信任」；私人 fleet 用自己的 CA 反而更可控。
+- **mTLS already encrypts everything; why SSH as well?** Different jobs: mTLS
+  is the everyday channel between Longarm machines; SSH is lazylongarm's
+  management channel to **install and repair** machines (Longarm itself has no
+  remote installation).
+- **Do Tailscale (WireGuard) and mTLS overlap?** A direct worker path over a
+  tailnet has two layers of encryption (WireGuard outside, mTLS inside). The
+  extra layer does no harm; Longarm does not depend on Tailscale and is just as
+  safe over plain TCP.
+- **Can the hub see my code or job output?** Not through the relay (end-to-end
+  mTLS). It does know which machines and jobs exist (metadata), and whoever runs
+  the hub can sign certificates, so trusting the hub's operator is still a
+  premise.
+- **Is a self-signed CA safe?** Safety does not depend on whether the CA is a
+  public authority but on whether fingerprints are compared correctly and the CA
+  key is protected. Public CAs suit strangers trusting each other; a private
+  fleet is easier to control with its own CA.
 
-## 延伸閱讀
+## Further reading
 
-- TOTP：[RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)；HOTP：[RFC 4226](https://www.rfc-editor.org/rfc/rfc4226)
-- TLS 1.3：[RFC 8446](https://www.rfc-editor.org/rfc/rfc8446)（client 憑證就是 mTLS）
-- Longarm：官方 `docs/design.md`、`docs/security.md`、`docs/usage.md` 的 enrollment／relay 章節
+- TOTP: [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238); HOTP:
+  [RFC 4226](https://www.rfc-editor.org/rfc/rfc4226)
+- TLS 1.3: [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) (client
+  certificates are what mTLS uses)
+- Longarm: the enrollment and relay sections of the upstream `docs/design.md`,
+  `docs/security.md` and `docs/usage.md`

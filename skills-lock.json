@@ -7,6 +7,13 @@
       "sourceType": "github",
       "skillPath": "skills/owned/go-cli-tui/SKILL.md",
       "computedHash": "91c9d12c11b0a86f6f1b0b96d9f2565150516ff703ccc997f06c6281d5d9baa9"
+    },
+    "zensical-site-bootstrap": {
+      "source": "daviddwlee84/agent-skills",
+      "commit": "a7aca29156c4098ee9cbc7ec70f700d2bd1f32da",
+      "sourceType": "github",
+      "skillPath": "skills/local/zensical-site-bootstrap/SKILL.md",
+      "computedHash": "53e2ef006991e96b3b1c34f34ed568c801b98baa7b6f2b2ccd1cb4940edc7838"
     }
   }
 }
