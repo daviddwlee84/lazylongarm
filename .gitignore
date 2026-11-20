@@ -17,3 +17,6 @@ completions/
 .specstory/references/
 .claude/plans/
 __pycache__/
+/site/
+/.cache/
+/.venv/
