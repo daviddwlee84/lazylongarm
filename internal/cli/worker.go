@@ -33,75 +33,97 @@ type workerAddFlags struct {
 	hubID       string
 	interactive bool
 	apply       applyOptions
+
+	// peer add: also enroll the machine's longarm as a client.
+	peer       bool
+	clientName string
+	clientUser string
+}
+
+// noun is what the command makes of the machine.
+func (f *workerAddFlags) noun() string {
+	if f.peer {
+		return "peer"
+	}
+	return "worker"
 }
 
 func workerAddCommand(o *options) *cobra.Command {
-	f := &workerAddFlags{}
-	c := &cobra.Command{
+	return machineAddCommand(o, &workerAddFlags{}, &cobra.Command{
 		Use:   "add [ssh-host]",
 		Short: "Make an SSH-reachable machine (or this one) a Longarm worker (wizard)",
 		Long: `Copy verified longarmd/longarm binaries to the machine's ~/.local/bin, enroll it
-with a one-time code from ` + "`longarm worker add`" + ` (passed over ssh stdin), start the
-service, wait until the hub reports it online and run a first command on it.
+with a one-time join code (passed over ssh stdin), start the service, wait until
+the hub reports it online and run a first command on it. The machine's own
+longarm stays signed out: use ` + "`lazylongarm peer add`" + ` to also let it dispatch.
 
 Bare in a terminal it opens a wizard; with a host argument (or --local) it builds
 the plan from flags. Rerunning skips steps that are already in place.`,
 		Example: `  lazylongarm worker add
   lazylongarm worker add build-box --label gpu=none
   lazylongarm worker add --local --service user --yes`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := o.load(); err != nil {
-				return err
+	})
+}
+
+// machineAddCommand wires `worker add` and `peer add`: the same flags and
+// flow, peer add with the client enrollment on top.
+func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.Command {
+	c.Args = cobra.MaximumNArgs(1)
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		if err := o.load(); err != nil {
+			return err
+		}
+		if len(args) == 1 {
+			f.req.Host = args[0]
+		}
+		if f.local && f.req.Host != "" {
+			return usage("give either an SSH host or --local, not both")
+		}
+		hub, ok := o.cfg.Hub(f.hubID)
+		if !ok {
+			return usage("no hub configured: run `lazylongarm hub setup` first")
+		}
+		f.req.Hub = hub
+		if f.req.Version == "" {
+			f.req.Version = hub.Version
+		}
+		bare := f.req.Host == "" && !f.local
+		if f.interactive || bare {
+			if !o.interactive(cmd) {
+				return usage("%s add needs an SSH host argument or --local when not in a terminal", f.noun())
 			}
-			if len(args) == 1 {
-				f.req.Host = args[0]
+			return o.workerAddWizard(cmd, f)
+		}
+		facts, err := o.probe(cmd, f.req.Host)
+		if err != nil {
+			return err
+		}
+		p, err := o.buildMachine(cmd.Context(), f, f.req, facts)
+		if err != nil {
+			return usage("%v", err)
+		}
+		if f.apply.dryRun {
+			return o.printPlan(cmd, p)
+		}
+		if err := o.review(cmd, p, f.apply); err != nil {
+			if errors.Is(err, errBack) {
+				return wizard.ErrCanceled
 			}
-			if f.local && f.req.Host != "" {
-				return usage("give either an SSH host or --local, not both")
-			}
-			hub, ok := o.cfg.Hub(f.hubID)
-			if !ok {
-				return usage("no hub configured: run `lazylongarm hub setup` first")
-			}
-			f.req.Hub = hub
-			if f.req.Version == "" {
-				f.req.Version = hub.Version
-			}
-			bare := f.req.Host == "" && !f.local
-			if f.interactive || bare {
-				if !o.interactive(cmd) {
-					return usage("worker add needs an SSH host argument or --local when not in a terminal")
-				}
-				return o.workerAddWizard(cmd, f)
-			}
-			facts, err := o.probe(cmd, f.req.Host)
-			if err != nil {
-				return err
-			}
-			p, err := o.buildWorker(cmd.Context(), f.req, facts)
-			if err != nil {
-				return usage("%v", err)
-			}
-			if f.apply.dryRun {
-				return o.printPlan(cmd, p)
-			}
-			if err := o.review(cmd, p, f.apply); err != nil {
-				if errors.Is(err, errBack) {
-					return wizard.ErrCanceled
-				}
-				return err
-			}
-			return o.finishWorkerAdd(cmd, p, f)
-		},
+			return err
+		}
+		return o.finishWorkerAdd(cmd, p, f)
 	}
 	fl := c.Flags()
-	fl.BoolVar(&f.local, "local", false, "make this machine a worker")
+	fl.BoolVar(&f.local, "local", false, "make this machine a "+f.noun())
 	fl.StringVar(&f.req.Name, "name", "", "worker name (default: the SSH alias, or this machine's hostname)")
 	fl.StringArrayVar(&f.req.Labels, "label", nil, "worker label KEY=VALUE (repeatable)")
 	fl.StringVar(&f.req.Service, "service", flows.ServiceSystem, "system (service via sudo, survives reboots) | user (background process, no sudo)")
 	fl.BoolVar(&f.req.DirectTailnet, "direct-tailnet", false, "also listen on the machine's tailnet IP for direct connections")
 	fl.BoolVar(&f.req.Reenroll, "reenroll", false, "enroll again although the machine has a certificate (after a revoke or a lost key)")
+	if f.peer {
+		fl.StringVar(&f.clientName, "client-name", "", "client node name (default: <worker name>-client; node names are unique on the hub)")
+		fl.StringVar(&f.clientUser, "client-user", "", "Longarm user the client certificate belongs to (required once the hub separates users)")
+	}
 	fl.StringVar(&f.req.Mint, "mint", "", "join code source: admin (admin join-code + approve; default for admins) | owner (longarm worker add; needs a Longarm user)")
 	fl.StringVar(&f.hubID, "hub", "", "hub id (default: the default hub)")
 	fl.StringVar(&f.req.Version, "longarm-version", "", "Longarm release tag to install (default: the hub's recorded version, else latest)")
@@ -110,7 +132,7 @@ the plan from flags. Rerunning skips steps that are already in place.`,
 	return c
 }
 
-func (o *options) buildWorker(ctx context.Context, req flows.WorkerRequest, facts *hostprobe.Facts) (*plan.Plan, error) {
+func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows.WorkerRequest, facts *hostprobe.Facts) (*plan.Plan, error) {
 	cacheDir, err := config.CacheDir()
 	if err != nil {
 		return nil, err
@@ -121,24 +143,32 @@ func (o *options) buildWorker(ctx context.Context, req flows.WorkerRequest, fact
 		}
 	}
 	client := &longarm.Client{ConfigDir: req.Hub.ConfigDir}
+	var who longarm.WhoAmI
+	if req.Mint == "" || f.peer {
+		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		who, _ = client.WhoAmI(wctx)
+		cancel()
+	}
 	if req.Mint == "" {
 		// Admins mint fleet-worker codes and approve them; owned workers
 		// (`longarm worker add`) need a Longarm user record on the hub.
 		req.Mint = flows.MintOwner
-		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		if w, err := client.WhoAmI(wctx); err == nil && w.Role == "admin" {
+		if who.Role == "admin" {
 			req.Mint = flows.MintAdmin
 		}
-		cancel()
 	}
-	return flows.BuildWorkerAdd(req, facts, flows.WorkerDeps{
+	deps := flows.WorkerDeps{
 		Config:   o.cfg,
 		Client:   client,
 		CacheDir: cacheDir,
 		Fetch: func(ctx context.Context, tag, asset string, logf func(string, ...any)) (string, error) {
 			return release.Fetch(ctx, cacheDir, tag, asset, logf)
 		},
-	})
+	}
+	if f.peer {
+		return flows.BuildPeerAdd(flows.PeerRequest{WorkerRequest: req, ClientName: f.clientName, ClientUser: f.clientUser, Tenancy: who.Tenancy}, facts, deps)
+	}
+	return flows.BuildWorkerAdd(req, facts, deps)
 }
 
 func (o *options) finishWorkerAdd(cmd *cobra.Command, p *plan.Plan, f *workerAddFlags) error {
@@ -159,6 +189,11 @@ func (o *options) finishWorkerAdd(cmd *cobra.Command, p *plan.Plan, f *workerAdd
 			}
 		}
 		fmt.Fprintf(out, "\nWorker %s is online (%s).\n\nTry:\n", name, dash(env.Get("worker_path")))
+		if f.peer {
+			client := flows.PeerDefaults(flows.PeerRequest{WorkerRequest: flows.WorkerRequest{Name: name}, ClientName: f.clientName}, nil).ClientName
+			fmt.Fprintf(out, "  longarm exec %s -- sh -lc 'longarm ls'   # its own longarm sees the fleet (client %s)\n", name, client)
+			fmt.Fprintf(out, "  longarm admin revoke %s               # take the client certificate back\n", client)
+		}
 		fmt.Fprintf(out, "  longarm exec %s -- nproc\n", name)
 		fmt.Fprintf(out, "  longarm run %s -- sleep 120     # then watch it in the dashboard's Jobs tab\n", name)
 		fmt.Fprintf(out, "  lazylongarm                       # dashboard\n")
@@ -194,7 +229,7 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 				choices = append(choices, wizard.Choice{Value: h, Label: label})
 			}
 			choices = append(choices, wizard.Choice{Value: "\x00other", Label: "(type another host: alias or user@host)"})
-			values, err := wizard.Edit(ctx, wizard.Spec{Title: "Which machine becomes a worker?", Description: "lazylongarm copies verified binaries over SSH, enrolls it with a one-time code and starts the service. Type / to search.", SubmitLabel: "Probe",
+			values, err := wizard.Edit(ctx, wizard.Spec{Title: "Which machine becomes a " + f.noun() + "?", Description: "lazylongarm copies verified binaries over SSH, enrolls it with a one-time code and starts the service" + map[bool]string{true: "; its longarm is enrolled as a client too", false: ""}[f.peer] + ". Type / to search.", SubmitLabel: "Probe",
 				Fields: []wizard.Field{{Key: "host", Label: "Machine", Kind: wizard.Select, Options: choices, Required: true}}}, in, out)
 			if err != nil {
 				return err
@@ -203,7 +238,7 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			case localChoice:
 				local = true
 			case "\x00other":
-				h, err := pickHost(ctx, "Which machine becomes a worker?", "", in, out)
+				h, err := pickHost(ctx, "Which machine becomes a "+f.noun()+"?", "", in, out)
 				if err != nil {
 					return err
 				}
@@ -235,12 +270,15 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			{Key: "labels", Label: "Labels", Value: strings.Join(req.Labels, ","), Help: "KEY=VALUE[,KEY=VALUE…], e.g. gpu=3090,pool=home (optional)"},
 			{Key: "service", Label: "Run longarmd as", Kind: wizard.Select, Value: req.Service, Options: serviceChoices},
 		}
+		if f.peer {
+			fields = append(fields, wizard.Field{Key: "client", Label: "Client name", Value: f.clientName, Help: "its longarm's node name (default: <worker name>-client)"})
+		}
 		if facts.TailscaleIP != "" {
 			fields = append(fields, wizard.Field{Key: "direct", Label: "Direct over tailnet", Kind: wizard.Toggle, Value: fmt.Sprint(req.DirectTailnet), Options: []wizard.Choice{{Value: "false", Label: "no — reach it through the hub relay (outbound only)"}, {Value: "true", Label: "yes — also listen on " + facts.TailscaleIP + ":7701 for tailnet peers"}}})
 		}
 		for {
 			values, err := wizard.EditDraft(ctx, wizard.Spec{
-				Title:       "Worker on " + facts.Where(),
+				Title:       map[bool]string{true: "Peer", false: "Worker"}[f.peer] + " on " + facts.Where(),
 				Description: fmt.Sprintf("%s · %s · %d CPU · %s · sudo %s · hub %s", facts.Distro, facts.Platform(), facts.CPUs, facts.MemSummary(), facts.Sudo, f.req.Hub.Address),
 				SubmitLabel: "Review", Back: true, Fields: fields,
 			}, in, out)
@@ -258,7 +296,10 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			req.Labels = splitLabels(values["labels"])
 			req.Service = values["service"]
 			req.DirectTailnet = values["direct"] == "true"
-			p, err := o.buildWorker(ctx, req, facts)
+			if f.peer {
+				f.clientName = strings.TrimSpace(values["client"])
+			}
+			p, err := o.buildMachine(ctx, f, req, facts)
 			if err != nil {
 				_ = wizard.Pause(ctx, "Cannot continue: "+err.Error(), in, out)
 				continue

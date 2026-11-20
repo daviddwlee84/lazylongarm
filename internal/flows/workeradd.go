@@ -301,7 +301,7 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 			if req.Mint == MintOwner {
 				code, err = deps.Client.WorkerAdd(ctx, req.Name, 15*time.Minute, req.Labels)
 			} else {
-				code, err = deps.Client.AdminJoinCode(ctx, req.Name, 15*time.Minute, req.Labels)
+				code, err = deps.Client.AdminJoinCode(ctx, longarm.JoinCodeRequest{Role: "worker", Name: req.Name, TTL: 15 * time.Minute, Labels: req.Labels})
 			}
 			if err != nil {
 				return err
@@ -449,12 +449,12 @@ echo "longarmd started (pid $!)"`, args...))
 			if deps.Config == nil {
 				return nil
 			}
-			id := req.Name
-			deps.Config.UpsertTarget(config.Target{ID: id, Name: req.Name, SSHHost: host, Hub: hub.ID, WorkerName: req.Name, OS: f.OS, Arch: f.Arch, Install: "push", Service: req.Service})
+			t := workerTarget(req, f)
+			deps.Config.UpsertTarget(t)
 			if err := deps.Config.Save(); err != nil {
 				return err
 			}
-			env.Logf("  saved target %q", id)
+			env.Logf("  saved target %q", t.ID)
 			return nil
 		},
 	})

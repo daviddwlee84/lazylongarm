@@ -134,6 +134,9 @@ func TestFleetCompanionActions(t *testing.T) {
 		return out
 	}
 	m.selected[tabFleet] = "a"
+	if e := enabled(); !e["add"] || !e["peer"] {
+		t.Fatalf("add actions with a hub: %v", e)
+	}
 	if e := enabled(); !e["remotes"] || !e["dotfiles"] {
 		t.Fatalf("managed row: %v", e)
 	}

@@ -57,10 +57,22 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   where the human types the password (the handoff the setup flows already do
   over SSH), and an opt-in `worker add` step that writes a reviewed sudoers
   allowlist for the service account. Never pipe a password to an agent.
-- **Warn about root-equivalent service accounts (P3, S)**: the `worker add`
-  probe should flag a service account in the `docker` group or with
-  `NOPASSWD: ALL` sudo: with shared isolation every job on that worker gets
-  root without a password.
+- **Worker posture check (P2, M)**: one `longarm exec` probe per worker,
+  shown by `status --doctor` (or a `lazylongarm audit`): the account jobs run
+  as, isolation mode, system vs user service; root-equivalent groups
+  (`docker`, `lxd`, `libvirt`, `disk`) and `sudo -n`; sensitive files that
+  account can read (`~/.ssh`, cloud and `gh` credentials, agent tokens,
+  `~/.config/longarm` from `peer add`); fleet vs owned, owner, shares,
+  `[access]`, end-to-end trust; several Longarm config/data dirs on one
+  machine. Flag the combination "client certificate + root-equivalent" (one
+  compromised job reaches the whole fleet). `peer add` already warns using
+  the probe's groups (`Facts.RootEquivalent`).
+- **Multi-hub profiles (P4, M)**: one machine in a personal and a team hub:
+  `--profile` mapping to `LONGARM_CONFIG_DIR` for the client side and a second
+  `longarmd service install --name … --data-dir … --listen …` (under another
+  OS account) for the worker side, with a hub switcher in the dashboard.
+  Unclear how useful it is, and hard to test with a single hub; revisit when
+  a second hub exists.
 - **GPU column in the Fleet tab (P3, S)**: Longarm's metrics stop at CPU and
   memory (GPU scheduling is an upstream non-goal). Poll `longarm exec <w> --
   nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu
@@ -79,7 +91,8 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
 Upstream issues worth filing (Longarm): `longarm skill print [reference]` /
 `--skill` to stdout (herdr/lazyclash style, lets a stub skill defer to the
 binary; low priority since copies already auto-refresh per release);
-`longarmd join --code-stdin`;
+`longarmd join --code-stdin` and `longarm join --code-stdin` (`peer add`
+and `hub setup` must put the client code on argv);
 `speedtest` missing from `cliFeatures`; `.deb` asset names differ from the docs
 (`longarm-linux-amd64.deb` vs `longarm_<v>_<arch>.deb`). Already filed: #159
 (web previews), #160 (XDG), #161 (worker completion for `ssh`, `desktop`,

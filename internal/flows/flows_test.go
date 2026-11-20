@@ -86,10 +86,11 @@ func TestHubValidationCatchesBusyPortsAndUnsupportedHosts(t *testing.T) {
 }
 
 type fakeClient struct {
-	approved []string
-	nodes    []longarm.Node
-	code     secret.Secret
-	execed   []string
+	approved  []string
+	nodes     []longarm.Node
+	code      secret.Secret
+	execed    []string
+	joinCodes []longarm.JoinCodeRequest
 }
 
 func (f *fakeClient) Version(context.Context) (longarm.VersionInfo, error) {
@@ -104,7 +105,8 @@ func (f *fakeClient) Workers(context.Context) (longarm.WorkerList, error) {
 func (f *fakeClient) WorkerAdd(context.Context, string, time.Duration, []string) (secret.Secret, error) {
 	return f.code, nil
 }
-func (f *fakeClient) AdminJoinCode(context.Context, string, time.Duration, []string) (secret.Secret, error) {
+func (f *fakeClient) AdminJoinCode(_ context.Context, req longarm.JoinCodeRequest) (secret.Secret, error) {
+	f.joinCodes = append(f.joinCodes, req)
 	return f.code, nil
 }
 func (f *fakeClient) AdminApprove(_ context.Context, name string) error {
@@ -181,5 +183,60 @@ func TestAdminMintApprovesPendingWorker(t *testing.T) {
 	}
 	if len(client.approved) != 1 || client.approved[0] != "w1" {
 		t.Fatalf("pending worker not approved exactly once: %v", client.approved)
+	}
+}
+
+func TestPeerPlanSteps(t *testing.T) {
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "sha256:aa", Mode: config.ModePublic}
+	client := &fakeClient{code: secret.New("C0DE-2")}
+	f := ubuntu()
+	f.Groups = []string{"david", "docker"}
+	p, err := BuildPeerAdd(PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Version: "v0.1.42"}}, f, WorkerDeps{Client: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(p); got != "binaries,enroll,service,online,try-it,enroll-client,try-peer,save-target" {
+		t.Fatalf("steps %s", got)
+	}
+	if p.Kind != "peer-add" {
+		t.Fatalf("kind %q", p.Kind)
+	}
+	var b strings.Builder
+	p.Render(&b)
+	review := b.String()
+	for _, s := range []string{"--role client --name worker-1-client", "join hub.example.com:7443 <code from stdin>", "longarm admin revoke worker-1-client", "group docker, passwordless sudo"} {
+		if !strings.Contains(review, s) {
+			t.Errorf("review lacks %q", s)
+		}
+	}
+	if strings.Contains(review, "C0DE-2") {
+		t.Fatal("review shows the code")
+	}
+	if len(client.joinCodes) != 0 {
+		t.Fatal("building the plan minted a code")
+	}
+}
+
+func TestPeerValidation(t *testing.T) {
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "sha256:aa"}
+	base := WorkerRequest{Host: "worker-1", Hub: hub}
+	cases := []struct {
+		req  PeerRequest
+		want string
+	}{
+		{PeerRequest{WorkerRequest: base, ClientName: "worker-1"}, "must differ from the worker name"},
+		{PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Mint: MintOwner}}, "needs an admin certificate"},
+		{PeerRequest{WorkerRequest: base, Tenancy: true}, "--client-user"},
+		{PeerRequest{WorkerRequest: base, ClientName: "bad name"}, "client name"},
+	}
+	for _, tc := range cases {
+		req := PeerDefaults(tc.req, ubuntu())
+		if err := ValidatePeer(req, ubuntu()); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%+v: got %v, want %q", tc.req, err, tc.want)
+		}
+	}
+	ok := PeerDefaults(PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice"}, ubuntu())
+	if err := ValidatePeer(ok, ubuntu()); err != nil || ok.ClientName != "worker-1-client" {
+		t.Fatalf("valid peer: %v (%q)", err, ok.ClientName)
 	}
 }

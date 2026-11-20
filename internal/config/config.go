@@ -79,6 +79,9 @@ type Target struct {
 	Install    string `toml:"install,omitempty"` // "push" (lazylongarm copied binaries to ~/.local/bin) | "existing"
 	Service    string `toml:"service,omitempty"` // "system" | "none"
 	AddedAt    string `toml:"added_at,omitempty"`
+	// ClientName is the machine's Longarm client node (`peer add`): its
+	// longarm can dispatch to other workers. "" = worker only.
+	ClientName string `toml:"client_name,omitempty"`
 
 	// Companion state, written by `lazylongarm companion dotfiles`.
 	DotfilesBundle    string `toml:"dotfiles_bundle,omitempty"`     // bundle used (or to use) for this machine
@@ -240,14 +243,18 @@ func (c *Config) RemoveHub(id string) {
 }
 
 // UpsertTarget inserts or replaces t by ID. Replacing keeps the original
-// added_at and the companion state when t leaves them empty, so rerunning
-// `worker add` does not forget what `companion dotfiles` recorded.
+// added_at, client name and the companion state when t leaves them empty, so
+// rerunning `worker add` does not forget what `peer add` or `companion
+// dotfiles` recorded.
 func (c *Config) UpsertTarget(t Target) {
 	for i := range c.Targets {
 		if c.Targets[i].ID == t.ID {
 			old := c.Targets[i]
 			if t.AddedAt == "" {
 				t.AddedAt = old.AddedAt
+			}
+			if t.ClientName == "" {
+				t.ClientName = old.ClientName
 			}
 			if t.DotfilesBundle == "" && t.DotfilesRev == "" && t.DotfilesAppliedAt == "" {
 				t.DotfilesBundle, t.DotfilesRev, t.DotfilesAppliedAt = old.DotfilesBundle, old.DotfilesRev, old.DotfilesAppliedAt

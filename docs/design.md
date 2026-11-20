@@ -41,8 +41,10 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
   runs interactively with `ssh -tt` (sudo timestamps are per TTY).
   Secret-returning reads never fall back to an interactive run.
 - **Secrets travel on stdin.** `longarmd join` receives the code from a fixed
-  `read -r code` wrapper over ssh stdin. Local `longarm join` has to take it
-  as an argument (upstream has no stdin form; it is single-use, 15 min).
+  `read -r code` wrapper over ssh stdin. `longarm join` (local in hub setup,
+  remote in peer add) has to take it as an argument, because upstream has no
+  stdin form: on a remote machine the wrapper reads it from ssh stdin and puts
+  it only on that `longarm join`'s argv. It is single-use and valid 15 min.
 - **XDG everywhere**, including macOS, for lazylongarm's own files.
 
 ## Companions

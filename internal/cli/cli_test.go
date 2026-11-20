@@ -52,6 +52,9 @@ func TestEntryPolicy(t *testing.T) {
 	if code, _, errOut := run(t, false, "worker", "add"); code != 2 || !strings.Contains(errOut, "no hub configured") {
 		t.Fatalf("worker add without hub: %d %s", code, errOut)
 	}
+	if code, _, errOut := run(t, false, "peer", "add"); code != 2 || !strings.Contains(errOut, "no hub configured") {
+		t.Fatalf("peer add without hub: %d %s", code, errOut)
+	}
 }
 
 func TestStatusJSONWithoutHub(t *testing.T) {

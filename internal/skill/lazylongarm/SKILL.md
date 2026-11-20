@@ -22,6 +22,7 @@ plan.
 | Apply it (after the user approved the plan) | same flags plus `--yes --json` |
 | Preview adding a worker | `lazylongarm worker add <ssh-alias> [--name N] [--label k=v] [--service system\|user] --dry-run --json` |
 | Apply it | same plus `--yes --json` |
+| Preview a peer (worker + its own longarm as a client, so sessions there can dispatch) | `lazylongarm peer add <ssh-alias> [--client-name N] [--client-user U] --dry-run --json` (admin certificate needed; show the user the warnings) |
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
 | hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
 | Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
@@ -44,9 +45,13 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   `longarm-hub.service`; the panel listens on 127.0.0.1:7480 only
   (`lazylongarm hub panel` tunnels it for a human).
 - Worker add pushes verified release binaries to `~/.local/bin`, mints a
-  15-minute owner code with `longarm worker add`, passes it over ssh stdin,
-  installs the service and waits until `longarm worker ls --json` shows it
-  online.
+  15-minute join code (admin join code + approve for admins, else an owner
+  code), passes it over ssh stdin, installs the service and waits until
+  `longarm worker ls --json` shows it online. The machine's own `longarm`
+  stays signed out.
+- Peer add does the same, then enrolls the machine's `longarm` as client
+  `<worker>-client` (client join code over ssh stdin) and runs `longarm ls`
+  there. Revoke with `longarm admin revoke <worker>-client`.
 - Companion setup never replaces another tool's state: machines already in hc
   or herdr, and dotfiles already set up, are skipped; dotfiles from a different
   repository are refused. The dotfiles bootstrap and `herdr machine add` may

@@ -30,6 +30,7 @@ type Facts struct {
 	DistroID      string            `json:"distro_id,omitempty"`
 	User          string            `json:"user"`
 	UID           int               `json:"uid"`
+	Groups        []string          `json:"groups,omitempty"` // the user's Unix groups (id -Gn)
 	Home          string            `json:"home"`
 	Hostname      string            `json:"hostname,omitempty"`
 	Sudo          string            `json:"sudo"` // nopasswd | password | absent
@@ -96,6 +97,8 @@ func Parse(out string) (*Facts, error) {
 			f.User = v
 		case k == "uid":
 			f.UID, _ = strconv.Atoi(v)
+		case k == "groups":
+			f.Groups = strings.Fields(v)
 		case k == "home":
 			f.Home = v
 		case k == "hostname":
@@ -219,4 +222,26 @@ func (f *Facts) MemSummary() string {
 		s += fmt.Sprintf(", %.1f GB available", float64(f.MemAvailKB)/1024/1024)
 	}
 	return s
+}
+
+// RootEquivalentGroups are groups whose members can become root without a
+// password (docker/lxd run privileged containers, libvirt starts VMs with host
+// devices, disk reads raw block devices).
+var RootEquivalentGroups = []string{"docker", "lxd", "libvirt", "disk"}
+
+// RootEquivalent lists why the probed account can act as root without a
+// password: root-equivalent groups and passwordless sudo.
+func (f *Facts) RootEquivalent() []string {
+	var why []string
+	for _, g := range f.Groups {
+		for _, r := range RootEquivalentGroups {
+			if g == r {
+				why = append(why, "group "+g)
+			}
+		}
+	}
+	if f.Sudo == "nopasswd" {
+		why = append(why, "passwordless sudo")
+	}
+	return why
 }

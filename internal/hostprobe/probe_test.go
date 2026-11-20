@@ -13,6 +13,7 @@ distro_id=ubuntu
 distro_pretty=Ubuntu 22.04.2 LTS
 user=david
 uid=1000
+groups=david adm sudo docker
 home=/home/david
 sudo=nopasswd
 has_systemctl=yes
@@ -64,5 +65,19 @@ func TestProbeScriptRunsLocally(t *testing.T) {
 	}
 	if f.OS == "" || f.Home == "" || f.User == "" {
 		t.Fatalf("%+v", f)
+	}
+}
+
+func TestRootEquivalent(t *testing.T) {
+	f, err := Parse(linuxOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.RootEquivalent(), ", "); got != "group docker, passwordless sudo" {
+		t.Fatalf("root-equivalent %q (groups %v)", got, f.Groups)
+	}
+	f.Groups, f.Sudo = []string{"staff"}, "password"
+	if got := f.RootEquivalent(); len(got) != 0 {
+		t.Fatalf("plain account flagged: %v", got)
 	}
 }
