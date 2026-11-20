@@ -3,6 +3,7 @@ package flows
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -279,5 +280,28 @@ func TestPeerValidation(t *testing.T) {
 	ok := PeerDefaults(PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice"}, ubuntu())
 	if err := ValidatePeer(ok, ubuntu()); err != nil || ok.ClientName != "worker-1-client" {
 		t.Fatalf("valid peer: %v (%q)", err, ok.ClientName)
+	}
+}
+
+func TestUserDaemonPatternSkipsTheCheckingShell(t *testing.T) {
+	re := regexp.MustCompile(userDaemonPattern)
+	check := `pgrep -u "$(id -u)" -f '` + userDaemonPattern + `' >/dev/null 2>&1`
+	for _, cmdline := range []string{
+		"/home/user/.local/bin/longarmd run --data-dir /home/user/.longarm",
+		"longarmd run",
+	} {
+		if !re.MatchString(cmdline) {
+			t.Errorf("pattern misses the daemon %q", cmdline)
+		}
+	}
+	for _, cmdline := range []string{
+		"sh -c " + check,                   // the check's own shell
+		"zsh -c 'sh' '-c' '" + check + "'", // the login shell running it over ssh
+		"vim notes about longarmd run",
+		"/home/user/.local/bin/longarmd runner",
+	} {
+		if re.MatchString(cmdline) {
+			t.Errorf("pattern matches non-daemon %q", cmdline)
+		}
 	}
 }

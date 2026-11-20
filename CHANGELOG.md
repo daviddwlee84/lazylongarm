@@ -25,6 +25,10 @@
   its keys with it. `settings show` lists them under `unknown_keys`. Broken
   TOML, type mismatches (now with the line number) and invalid references
   still fail.
+- `worker add --service user`: the "Start longarmd in the background" step no
+  longer skips itself as "already in place" when no daemon is running. Its
+  `pgrep -f` pattern matched the checking shell's own command line; it is now
+  anchored to a command line that starts with `longarmd run`.
 
 ## v0.2.0 — 2026-11-21
 

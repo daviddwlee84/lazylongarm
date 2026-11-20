@@ -25,6 +25,14 @@ const (
 	ServiceUser   = "user"   // background `longarmd run` as the SSH user; no sudo, stops at reboot
 )
 
+// userDaemonPattern finds a background `longarmd run` with pgrep -f. It is
+// anchored at the start of the command line (argv[0] ending in longarmd):
+// the check itself runs as `sh -c '<script>'` under the login shell, whose
+// command lines contain the words "longarmd run" too, so an unanchored
+// pattern always matched its own parent shell and the step was skipped as
+// "already in place" with no daemon running.
+const userDaemonPattern = `^[^ ]*longarmd run( |$)`
+
 // WorkerRequest describes `worker add`.
 type WorkerRequest struct {
 	Host          string   // SSH alias; "" = this machine
@@ -355,7 +363,7 @@ bin="$1"; user="$2"; shift 2
 			ID: "service", Title: "Start longarmd in the background as " + f.User, Idempotent: true,
 			Actions: []plan.Action{{Where: where, Display: fmt.Sprintf("nohup %s run%s >> ~/.longarm/longarmd.out &", longarmdPath, joinArgs(installArgs))}},
 			Check: func(ctx context.Context, env *plan.Env) (bool, error) {
-				r := run(`pgrep -u "$(id -u)" -f "longarmd run" >/dev/null 2>&1`)
+				r := run(`pgrep -u "$(id -u)" -f '` + userDaemonPattern + `' >/dev/null 2>&1`)
 				r.Timeout = 30 * time.Second
 				_, err := env.RunQuiet(ctx, r)
 				return checkResult(err)
