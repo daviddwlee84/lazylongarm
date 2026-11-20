@@ -14,7 +14,7 @@ type LongarmClient interface {
 	WhoAmI(ctx context.Context) (longarm.WhoAmI, error)
 	Workers(ctx context.Context) (longarm.WorkerList, error)
 	WorkerAdd(ctx context.Context, name string, ttl time.Duration, labels []string) (secret.Secret, error)
-	AdminJoinCode(ctx context.Context, name string, ttl time.Duration, labels []string) (secret.Secret, error)
+	AdminJoinCode(ctx context.Context, req longarm.JoinCodeRequest) (secret.Secret, error)
 	AdminApprove(ctx context.Context, name string) error
 	Join(ctx context.Context, address string, code secret.Secret, fingerprint string) ([]byte, error)
 	DaemonStart(ctx context.Context) error

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `peer add [host] | --local`: `worker add` plus a client enrollment of the
+  machine's own `longarm` (`<worker>-client`, client join code over ssh stdin),
+  so herdr/ssh sessions on it can dispatch to the other workers. Upgrades an
+  existing worker in place; the review warns that jobs there can then dispatch
+  too, louder for root-equivalent accounts. Dashboard Fleet tab: `P`.
+- The host probe reports the account's Unix groups.
+- Docs: `worker add` uses an admin join code when you hold an admin
+  certificate (the docs said owner code).
+
 ## v0.2.0 — 2026-11-21
 
 - `companion status|remotes|dotfiles`: register fleet machines in hc and herdr

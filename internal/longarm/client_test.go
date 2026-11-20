@@ -156,3 +156,26 @@ func TestKillUsesIfCreatedAtWhenAdvertised(t *testing.T) {
 		t.Fatal("feature not detected")
 	}
 }
+
+func TestAdminJoinCodeRoles(t *testing.T) {
+	for _, tc := range []struct {
+		req  JoinCodeRequest
+		want []string
+		not  []string
+	}{
+		{JoinCodeRequest{Name: "w1", TTL: 15 * time.Minute, Labels: []string{"gpu=none"}}, []string{"--role worker", "--name w1", "--labels gpu=none"}, []string{"--user"}},
+		{JoinCodeRequest{Role: "client", Name: "w1-client", User: "alice", TTL: 15 * time.Minute, Labels: []string{"gpu=none"}}, []string{"--role client", "--name w1-client", "--user alice"}, []string{"--labels"}},
+	} {
+		argv := strings.Join(joinCodeArgs(tc.req), " ")
+		for _, w := range tc.want {
+			if !strings.Contains(argv, w) {
+				t.Errorf("%+v: argv %q lacks %q", tc.req, argv, w)
+			}
+		}
+		for _, n := range tc.not {
+			if strings.Contains(argv, n) {
+				t.Errorf("%+v: argv %q has %q", tc.req, argv, n)
+			}
+		}
+	}
+}

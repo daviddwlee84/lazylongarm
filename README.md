@@ -52,6 +52,7 @@ go build -o bin/lazylongarm ./cmd/lazylongarm
 ```sh
 bin/lazylongarm hub setup      # wizard: pick an SSH host, review the plan, apply
 bin/lazylongarm worker add     # wizard: pick an SSH host or this machine
+bin/lazylongarm peer add       # the same, and the machine's longarm can dispatch too
 bin/lazylongarm                # dashboard: Fleet · Jobs · Hub
 bin/lazylongarm hub panel      # Longarm's web panel through an SSH tunnel
 ```
@@ -80,12 +81,33 @@ is already in place; the journal lives in `$XDG_STATE_HOME/lazylongarm/ops/`.
 
 1. Copies verified `longarmd`/`longarm` for the machine's OS/arch into its
    `~/.local/bin` (via ssh stdin; skipped when identical).
-2. Mints a 15-minute owner code with `longarm worker add` and passes it to
-   `longarmd join` **over ssh stdin** (never in the review, logs or config).
+2. Mints a 15-minute join code (`longarm admin join-code --role worker` +
+   `admin approve` with an admin certificate, else an owner code from
+   `longarm worker add`) and passes it to `longarmd join` **over ssh stdin**
+   (never in the review, logs or config).
 3. Installs the service (`longarmd service install --user <you>`; sudo is
    handed to your terminal when it needs a password) or starts a user process.
 4. Waits until `longarm worker ls --json` reports it online, then runs
    `longarm exec <worker> -- uname -a`.
+
+The machine's own `longarm` stays signed out, so a shell on it cannot dispatch.
+
+### What `peer add` does
+
+Everything `worker add` does (steps already in place are skipped, so it also
+upgrades an existing worker), then:
+
+1. Mints a 15-minute **client** code (`longarm admin join-code --role client
+   --name <worker>-client`; needs an admin certificate, no approval) and runs
+   `longarm join` on the machine with the code from ssh stdin.
+2. Runs `longarm ls` there: a herdr or ssh session on the machine can now run
+   `longarm exec|run` against the other workers.
+
+The client is its own node (node names are unique on the hub). Jobs on the
+machine run as the account that holds it, so any job there can dispatch to
+every worker you can use; the review warns, louder for root-equivalent
+accounts (`docker`/`lxd`/`libvirt`/`disk` group, passwordless sudo). Take it
+back with `longarm admin revoke <worker>-client`.
 
 ## Commands
 
@@ -99,6 +121,7 @@ is already in place; the journal lives in `$XDG_STATE_HOME/lazylongarm/ops/`.
 | `hub backup` | stop briefly, archive `/var/lib/longarm-hub` into the state dir (0600) |
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags) |
+| `peer add [host] \| --local` | a worker whose own longarm is also enrolled as a client (`--client-name`, `--client-user`) |
 | `worker ls` | hub registry merged with machines lazylongarm manages |
 | `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
 | `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer |

@@ -6,8 +6,8 @@
 |---|---|
 | `lazylongarm` in a terminal | dashboard |
 | `lazylongarm` without a terminal | help |
-| `hub setup` / `worker add` bare in a terminal | wizard |
-| `hub setup --host H --address A` / `worker add HOST` | same plan from flags; Review in a terminal, `--yes` otherwise |
+| `hub setup` / `worker add` / `peer add` bare in a terminal | wizard |
+| `hub setup --host H --address A` / `worker add HOST` / `peer add HOST` | same plan from flags; Review in a terminal, `--yes` otherwise |
 | `--interactive` with some flags | wizard prefilled from the flags |
 | partial flags (`hub setup --host H`) | usage error (exit 2), never a wizard |
 | `--dry-run [--json]` | print the plan, change nothing |
@@ -66,14 +66,37 @@ TOTP login).
 | Run longarmd as `user` | background `longarmd run` as you; no sudo; restart after a reboot |
 | Direct over tailnet | also listen on the tailnet IP (plus an explicit hub relay listener) for direct paths between tailnet peers; default is relay only (outbound connections) |
 
-Workers you add with lazylongarm are **owned** by you (`longarm worker add`):
-pre-approved and usable only by you until you `longarm worker share` them.
+With an admin certificate, lazylongarm adds **fleet** workers (`longarm admin
+join-code --role worker`, approved right after they join). Without one it
+mints an owner code (`longarm worker add`): the worker is yours, pre-approved
+and usable only by you until you `longarm worker share` it. `--mint` picks one.
+
+## Peer add
+
+`peer add` is `worker add` plus a client enrollment of the machine's own
+`longarm`, so sessions on it (herdr, ssh, a handed-off agent) can dispatch to
+the other workers. On a machine that is already a worker only the client steps
+run.
+
+| Choice | Meaning |
+|---|---|
+| Client name | the client node's name, default `<worker>-client` (node names are unique on the hub) |
+| `--client-user` | the Longarm user the certificate belongs to; required once the hub separates users |
+
+- Needs an admin certificate (client codes come from `longarm admin
+  join-code --role client`); they are issued without approval.
+- An existing client certificate for the same hub is kept; one for another hub
+  stops the plan (`--reenroll` replaces it).
+- The client certificate lives in `~/.config/longarm` of the account jobs run
+  as: any job on that machine can dispatch to every worker you can use. The
+  review warns, and louder when the account is root-equivalent. Revoke with
+  `longarm admin revoke <worker>-client`.
 
 ## Dashboard
 
 | Tab | Shows | Actions |
 |---|---|---|
-| 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
+| 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
 | 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
 | 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel tunnel on/off · `U` panel login |
 

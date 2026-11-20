@@ -15,6 +15,7 @@ elif has sw_vers; then
 fi
 kv user "$(id -un 2>/dev/null)"
 kv uid "$(id -u 2>/dev/null)"
+kv groups "$(id -Gn 2>/dev/null)"
 kv home "$HOME"
 kv hostname "$(hostname 2>/dev/null)"
 if has sudo; then

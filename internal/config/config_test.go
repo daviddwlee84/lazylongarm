@@ -98,3 +98,12 @@ func TestPresetsDecodeTypedValues(t *testing.T) {
 		t.Fatalf("%#v", c.Companions.Dotfiles)
 	}
 }
+
+func TestUpsertKeepsClientName(t *testing.T) {
+	c, _ := Load(filepath.Join(t.TempDir(), "c.toml"), false)
+	c.UpsertTarget(Target{ID: "w1", Name: "w1", SSHHost: "worker-1", ClientName: "w1-client"}) // peer add
+	c.UpsertTarget(Target{ID: "w1", Name: "w1", SSHHost: "worker-1", Service: "user"})         // worker add rerun
+	if got := c.Targets[0]; got.ClientName != "w1-client" || got.Service != "user" {
+		t.Fatalf("upsert lost the client: %+v", got)
+	}
+}

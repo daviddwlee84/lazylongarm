@@ -311,17 +311,21 @@ func (c *Client) WorkerAdd(ctx context.Context, name string, ttl time.Duration, 
 	return secret.New(line), nil
 }
 
-// AdminJoinCode mints a one-time worker join code as an admin (`longarm admin
-// join-code --role worker`). The worker joins pending unless the hub
-// auto-approves; approve it with AdminApprove. Only the code is on stdout.
-func (c *Client) AdminJoinCode(ctx context.Context, name string, ttl time.Duration, labels []string) (secret.Secret, error) {
-	args := []string{"admin", "join-code", "--role", "worker", "--ttl", ttl.String()}
-	if name != "" {
-		args = append(args, "--name", name)
-	}
-	if len(labels) > 0 {
-		args = append(args, "--labels", strings.Join(labels, ","))
-	}
+// JoinCodeRequest describes `longarm admin join-code`.
+type JoinCodeRequest struct {
+	Role   string // "worker" (default) or "client"
+	Name   string // fixed node name
+	User   string // client: the Longarm user the certificate belongs to ("" = the node's own name)
+	TTL    time.Duration
+	Labels []string // worker only
+}
+
+// AdminJoinCode mints a one-time join code as an admin (`longarm admin
+// join-code`). A worker joins pending unless the hub auto-approves; approve it
+// with AdminApprove. A client code is issued without approval. Only the code
+// is on stdout.
+func (c *Client) AdminJoinCode(ctx context.Context, req JoinCodeRequest) (secret.Secret, error) {
+	args := joinCodeArgs(req)
 	out, err := c.Run(ctx, 30*time.Second, nil, args...)
 	if err != nil {
 		return secret.Secret{}, err
@@ -331,6 +335,24 @@ func (c *Client) AdminJoinCode(ctx context.Context, name string, ttl time.Durati
 		return secret.Secret{}, errors.New("longarm admin join-code printed no code")
 	}
 	return secret.New(fields[0]), nil
+}
+
+func joinCodeArgs(req JoinCodeRequest) []string {
+	role := req.Role
+	if role == "" {
+		role = "worker"
+	}
+	args := []string{"admin", "join-code", "--role", role, "--ttl", req.TTL.String()}
+	if req.Name != "" {
+		args = append(args, "--name", req.Name)
+	}
+	if req.User != "" && role != "worker" {
+		args = append(args, "--user", req.User)
+	}
+	if len(req.Labels) > 0 && role == "worker" {
+		args = append(args, "--labels", strings.Join(req.Labels, ","))
+	}
+	return args
 }
 
 // AdminApprove approves a pending node.
