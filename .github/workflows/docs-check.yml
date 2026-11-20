@@ -1,5 +1,7 @@
-name: Documentation check
+name: Documentation
 
+# Pull requests only build and check. Pushes to main also publish to GitHub
+# Pages (repository Settings → Pages → Source: GitHub Actions).
 on:
   pull_request:
     paths: ['docs/**', 'zensical.toml', 'pyproject.toml', 'uv.lock', 'scripts/check-docs-site.py', '.github/workflows/docs-check.yml']
@@ -12,8 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docs-check-${{ github.ref }}
-  cancel-in-progress: true
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -21,10 +23,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
       # Let uv honor the consuming project's Python requirement.
       - run: uv sync --locked --only-group docs
-      - run: uv run --no-sync zensical build --strict
+      - run: uv run --no-sync zensical build --strict --clean
       - run: uv run --no-sync python scripts/check-docs-site.py
-      # Deliberately no deployment, Pages permissions, or public preview.
+      - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v6
+      - id: deployment
+        uses: actions/deploy-pages@v5

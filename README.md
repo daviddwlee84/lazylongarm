@@ -141,8 +141,9 @@ Releases: push a `vX.Y.Z` tag on `main`; CI reruns the tests and GoReleaser
 creates a **draft** release (darwin/linux × amd64/arm64 + `checksums.txt`)
 that is published after checking its assets.
 
-Docs site (Zensical, English, `docs/` only; build-only CI in
-`.github/workflows/docs-check.yml`):
+Docs site (Zensical, English, `docs/` only). `.github/workflows/docs-check.yml`
+builds and checks it on pull requests and publishes it to GitHub Pages from
+`main`:
 
 ```sh
 uv sync --locked --group docs
