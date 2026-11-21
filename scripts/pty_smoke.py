@@ -52,6 +52,11 @@ case "$1 $2" in
   "worker ls") cat "$F/worker-ls.json";;
   "jobs --json") cat "$F/jobs.json";;
   "doctor --json") cat "$F/doctor.json";;
+  "admin user")
+    case "$3" in
+      ls) printf '{"users":[{"name":"alice","device_count":1,"worker_count":1}],"tenancy":true}\n';;
+      *) echo "unexpected longarm $*" >&2; exit 2;;
+    esac;;
   logs*) printf 'hello from the job\nsecond line\n';;
   *) echo "unexpected longarm $*" >&2; exit 2;;
 esac
@@ -322,6 +327,24 @@ def panel_access_cancel(env, log):
     print("hub panel-access (wizard/review/cancel, nothing applied): ok")
 
 
+def user_invite_cancel(env, log):
+    """user invite refuses while a fleet worker exists; with
+    --allow-fleet-workers it asks first, and canceling adds nobody."""
+    log.write_text("")
+    t = Terminal(["user", "invite", "bob"], env)
+    code = t.exit_code()
+    assert code == 2, f"invite with a fleet worker exit {code}\n{t.text()}"
+    assert "worker-2" in t.text(), t.text()
+    t = Terminal(["user", "invite", "bob", "--allow-fleet-workers"], env)
+    t.wait("Invite bob")
+    t.wait("client join code")
+    t.send("\x03")
+    code = t.exit_code()
+    assert code == 130, f"canceled invite exit {code}\n{t.text()}"
+    assert "admin user add" not in log.read_text(), "canceled invite added the user"
+    print("user invite (fleet-worker gate, confirm, cancel adds nobody): ok")
+
+
 def mouse(env):
     """Mouse capture is on by default: clicks switch tabs and fire footer
     actions on release; M turns capture off and back on."""
@@ -395,6 +418,7 @@ def main():
         ctrl_c_in_handoff(env, root)
         companion_remotes_cancel(env, root / "fake.log")
         panel_access_cancel(env, root / "fake.log")
+        user_invite_cancel(env, root / "fake.log")
         mouse(env)
         no_color(env)
         narrow(env)

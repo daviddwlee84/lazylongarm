@@ -91,17 +91,52 @@ func TestHubValidationCatchesBusyPortsAndUnsupportedHosts(t *testing.T) {
 
 type fakeClient struct {
 	approved  []string
+	revoked   []string
 	nodes     []longarm.Node
 	code      secret.Secret
 	execed    []string
 	joinCodes []longarm.JoinCodeRequest
+	who       longarm.WhoAmI
+	users     longarm.UserList
+	userAdds  []longarm.UserAddRequest
+	added     longarm.UserAdded
+	joins     []string // "join" | "join --force"
+	calls     []string // order of side effects
 }
 
 func (f *fakeClient) Version(context.Context) (longarm.VersionInfo, error) {
 	return longarm.VersionInfo{Version: "v0.1.42"}, nil
 }
 func (f *fakeClient) WhoAmI(context.Context) (longarm.WhoAmI, error) {
-	return longarm.WhoAmI{Role: "admin"}, nil
+	if f.who.Role == "" {
+		return longarm.WhoAmI{Role: "admin"}, nil
+	}
+	return f.who, nil
+}
+func (f *fakeClient) AdminRevoke(_ context.Context, name string) error {
+	f.revoked = append(f.revoked, name)
+	f.calls = append(f.calls, "revoke "+name)
+	return nil
+}
+func (f *fakeClient) AdminUsers(context.Context) (longarm.UserList, error) { return f.users, nil }
+func (f *fakeClient) AdminUserAdd(_ context.Context, req longarm.UserAddRequest) (longarm.UserAdded, error) {
+	f.userAdds = append(f.userAdds, req)
+	f.calls = append(f.calls, "user add "+req.Name)
+	return f.added, nil
+}
+func (f *fakeClient) AdminUserCode(_ context.Context, req longarm.UserAddRequest) (longarm.UserAdded, error) {
+	f.userAdds = append(f.userAdds, req)
+	f.calls = append(f.calls, "user code "+req.Name)
+	return f.added, nil
+}
+func (f *fakeClient) JoinForce(context.Context, string, secret.Secret, string) ([]byte, error) {
+	f.joins = append(f.joins, "join --force")
+	f.calls = append(f.calls, "join --force")
+	return nil, nil
+}
+func (f *fakeClient) DaemonStop(context.Context) error {
+	f.calls = append(f.calls, "daemon stop")
+	return nil
 }
 func (f *fakeClient) Workers(context.Context) (longarm.WorkerList, error) {
 	return longarm.WorkerList{Nodes: f.nodes}, nil
@@ -111,6 +146,7 @@ func (f *fakeClient) WorkerAdd(context.Context, string, time.Duration, []string)
 }
 func (f *fakeClient) AdminJoinCode(_ context.Context, req longarm.JoinCodeRequest) (secret.Secret, error) {
 	f.joinCodes = append(f.joinCodes, req)
+	f.calls = append(f.calls, "join-code "+req.Name)
 	return f.code, nil
 }
 func (f *fakeClient) AdminApprove(_ context.Context, name string) error {
@@ -118,9 +154,13 @@ func (f *fakeClient) AdminApprove(_ context.Context, name string) error {
 	return nil
 }
 func (f *fakeClient) Join(context.Context, string, secret.Secret, string) ([]byte, error) {
+	f.joins = append(f.joins, "join")
 	return nil, nil
 }
-func (f *fakeClient) DaemonStart(context.Context) error { return nil }
+func (f *fakeClient) DaemonStart(context.Context) error {
+	f.calls = append(f.calls, "daemon start")
+	return nil
+}
 func (f *fakeClient) Exec(_ context.Context, w string, argv ...string) ([]byte, error) {
 	f.execed = append(f.execed, w)
 	return []byte("Linux box"), nil

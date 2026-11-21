@@ -73,6 +73,15 @@ for clients and admins, renewed automatically before expiry. The
 **ssh stdin** (`read -r code`). It never appears on the Review screen, in logs or
 in the config file, and it does not land in the remote shell history.
 
+**Owned workers skip step 5.** On a hub with users, a code minted with
+`--owner alice` (`lazylongarm worker add HOST --owner alice`, or alice's own
+`longarm worker add`) makes a worker that joins already approved and that only
+alice may use: nobody else can run anything on it, so there is nothing for an
+admin to approve. The certificate itself is the same kind; the owner is a
+record on the hub, pushed to the worker, which then refuses everyone else
+(admins included). A worker cannot change owner in place; it enrolls again
+with a new node ID (`worker add --reenroll --owner`).
+
 ## 3. What happens on a connection (mTLS)
 
 ```
@@ -181,7 +190,8 @@ There are **two independent management paths** that can rescue each other:
 | Leaked or lost | What to do | Path |
 |---|---|---|
 | TOTP secret or panel password | `lazylongarm hub panel-user NAME --reset` (new password and secret; the old ones stop working at once), or `U` → reset in the dashboard | B |
-| A worker's private key | `longarm admin revoke <worker>` (per the docs: the worker rejects the old certificate within one heartbeat), then `lazylongarm worker add <host> --reenroll` | A, plus SSH to re-enroll |
+| A worker's private key | `lazylongarm worker add <host> --reenroll` (revokes the old node, then the worker enrolls again with a new key and restarts; per the docs the old certificate is rejected within one heartbeat) | A, plus SSH to re-enroll |
+| Another user's device or worker | `lazylongarm user remove <user>` revokes all of them (you cannot see them by name: admins only see counts) | A |
 | Your laptop (admin certificate) lost or leaked | On the hub host, mint a new admin code (`longarm-hub join-code --role admin`), enroll another machine as the new admin, then `longarm admin revoke laptop` | **B**: no old admin certificate needed, so a lost laptop is recoverable |
 | A join code | Expires after 15 minutes, works once, and still needs admin approval; `longarm admin join-codes` lists recent codes (without the codes themselves) | — |
 | **The hub CA private key** | Worst case: no certificate can be trusted any more; create a new CA and re-enroll every machine (`hub setup`, then `worker add --reenroll` on each) | B, plus SSH to every machine |

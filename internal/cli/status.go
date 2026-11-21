@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/daviddwlee84/lazylongarm/internal/config"
+	"github.com/daviddwlee84/lazylongarm/internal/flows"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +52,9 @@ func statusCommand(o *options) *cobra.Command {
 					} else {
 						rep.Errors = append(rep.Errors, "doctor: "+firstLine(err.Error()))
 					}
+					if rep.WhoAmI != nil {
+						rep.Doctor = append(rep.Doctor, tenancyChecks(ctx, client, *rep.WhoAmI)...)
+					}
 				}
 			} else {
 				rep.Errors = append(rep.Errors, firstLine(err.Error()))
@@ -74,7 +79,11 @@ func statusCommand(o *options) *cobra.Command {
 				fmt.Fprintf(w, "longarm  %s\n", rep.Longarm)
 			}
 			if rep.WhoAmI != nil {
-				fmt.Fprintf(w, "client   %s (%s) on hub %q, certificate until %s\n", rep.WhoAmI.Name, rep.WhoAmI.Role, rep.WhoAmI.HubName, rep.WhoAmI.CertNotAfter)
+				user := ""
+				if rep.WhoAmI.Tenancy {
+					user = ", user " + rep.WhoAmI.User
+				}
+				fmt.Fprintf(w, "client   %s (%s%s) on hub %q, certificate until %s\n", rep.WhoAmI.Name, rep.WhoAmI.Role, user, rep.WhoAmI.HubName, rep.WhoAmI.CertNotAfter)
 			}
 			for _, d := range rep.Doctor {
 				mark := map[string]string{"ok": "✓", "warn": "!", "fail": "✗", "skip": "-", "info": "i"}[d.Status]
@@ -117,4 +126,31 @@ func settingsCommand(o *options) *cobra.Command {
 		},
 	})
 	return c
+}
+
+// tenancyChecks are lazylongarm's checks for a hub that separates users,
+// seen from an admin certificate: fleet workers every user may use, and an
+// admin certificate whose user has no record (it predates users).
+func tenancyChecks(ctx context.Context, client *longarm.Client, who longarm.WhoAmI) []longarm.DoctorCheck {
+	if !who.Tenancy || who.Role != "admin" {
+		return nil
+	}
+	var out []longarm.DoctorCheck
+	if users, err := client.AdminUsers(ctx); err == nil {
+		if _, ok := users.Find(who.User); !ok {
+			out = append(out, longarm.DoctorCheck{ID: "lazylongarm-user", Title: "user record", Status: "warn",
+				Detail: fmt.Sprintf("this admin certificate acts as %q, which has no user record: it sees only fleet workers and its own jobs", who.User),
+				Fix:    "lazylongarm user self <you>"})
+		} else {
+			out = append(out, longarm.DoctorCheck{ID: "lazylongarm-user", Title: "user record", Status: "ok", Detail: "admin of user " + who.User})
+		}
+	}
+	if list, err := client.Workers(ctx); err == nil {
+		if fw := flows.FleetWorkers(list.Nodes); len(fw) > 0 {
+			out = append(out, longarm.DoctorCheck{ID: "lazylongarm-fleet", Title: "fleet workers", Status: "warn",
+				Detail: "every user of the hub may use: " + strings.Join(fw, ", "),
+				Fix:    "lazylongarm worker add <host> --reenroll --owner <you>"})
+		}
+	}
+	return out
 }

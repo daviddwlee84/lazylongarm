@@ -7,7 +7,8 @@
 | `lazylongarm` in a terminal | dashboard |
 | `lazylongarm` without a terminal | help |
 | `hub setup` / `worker add` / `peer add` bare in a terminal | wizard |
-| `hub setup --host H --address A` / `worker add HOST` / `peer add HOST` | same plan from flags; Review in a terminal, `--yes` otherwise |
+| `hub setup --host H --address A` / `worker add HOST` / `peer add HOST` / `user self USER` | same plan from flags; Review in a terminal, `--yes` otherwise |
+| `user invite USER` / `user remove USER` | one confirmation in a terminal, `--yes` otherwise (`invite` also accepts `--out FILE`) |
 | `--interactive` with some flags | wizard prefilled from the flags |
 | partial flags (`hub setup --host H`) | usage error (exit 2), never a wizard |
 | `--dry-run [--json]` | print the plan, change nothing |
@@ -73,6 +74,15 @@ With an admin certificate, lazylongarm adds **fleet** workers (`longarm admin
 join-code --role worker`, approved right after they join). Without one it
 mints an owner code (`longarm worker add`): the worker is yours, pre-approved
 and usable only by you until you `longarm worker share` it. `--mint` picks one.
+`--owner USER` (admins) mints an admin code owned by that user instead: it
+joins approved, and only that user can use it. See [Users and sharing](#users-and-sharing).
+
+`--reenroll` enrolls a machine that already has a certificate: it revokes the
+hub's node of that name (after the new code exists, so a failed mint changes
+nothing), joins with `--force`, keeps the old node's labels unless you pass
+`--label`, and restarts the service, because longarmd reloads certificates of
+the same node only. The worker gets a new node ID; its port links go, its job
+history stays with the old ID.
 
 ### How the binaries get there
 
@@ -117,6 +127,45 @@ hub: a proxy or firewall in the way (a Clash/mihomo TUN that lost its
 upstream, for example), or a clock that is far off. The host probe warns
 when the machine's clock differs from this one by more than two minutes;
 proxies such as VMess and TLS both fail with a clock that is hours off.
+
+## Users and sharing
+
+A hub can serve several people, each with their own machines. The first
+Longarm user separates users at once, and three upstream rules decide the
+order of the steps:
+
+- **Fleet workers** (no owner) are usable by every user, including a new one.
+- A certificate without a user record (the admin certificate from `hub setup`)
+  acts as a user named after itself, and **admins are not exempt** on other
+  users' owned workers.
+- A user-bound join code works for the user's **first device only**; later
+  devices run `longarm login` and are approved at the panel's `/link` page
+  with that user's panel login. (`peer add --client-user U` refuses once `U`
+  has a device and says so.)
+
+| Step | Command | What happens |
+|---|---|---|
+| 1 | `lazylongarm user self alice --device alice-laptop` | backs up `<config>/tls`, `admin user add alice --admin --panel`, `longarm join --force` with the new code (the client daemon is restarted), checks `whoami`. Prints the panel password and TOTP once |
+| 2 | `lazylongarm worker add HOST --reenroll --owner alice` per fleet worker | see [Worker add](#worker-add); refuses when this machine acts as another user (the worker would vanish from its view) or the user does not exist |
+| 3 | `lazylongarm user remove <old-certificate>` | revokes the old admin certificate's implicit user (never `--purge` here: that also deletes its job records) |
+| 4 | `lazylongarm user invite bob --out bob.md` | refuses while fleet workers exist (`--allow-fleet-workers` overrides); adds `bob` with a one-time client code and writes a 0600 Markdown invite |
+
+The invite holds everything bob needs without anyone's SSH access or the web
+panel: the release URLs and sha256 of `longarm`/`longarmd` per platform,
+`longarm join <hub> <code> --ca-fingerprint <fp>`, then per machine
+`longarm worker add <name>` (an owner code, no approval) and
+`longarmd join … --name <name>` plus the service install. It also explains
+what the hub's operator can see and suggests `[access] owners/users` and
+`hub_job_details = false` in each machine's `longarmd.toml`.
+
+Programs that loaded the old certificate before step 1 (`longarm mcp` in agent
+sessions, the tray) keep using it; restart them. `status --doctor` warns about
+fleet workers and an admin certificate without a user record.
+
+Sharing stays off: an admin allows it per user (`longarm admin user set
+alice --can-share`) and the owner shares one worker (`longarm worker share
+<worker> --user bob`). Share Linux workers only with `[isolation] mode =
+"per-user"` (jobs run as `la-<user>`); macOS has no per-user isolation.
 
 ## Peer add
 
