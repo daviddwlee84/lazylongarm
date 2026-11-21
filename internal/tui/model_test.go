@@ -182,10 +182,10 @@ func TestPanelKeyOpensDirectURLWithoutTunnel(t *testing.T) {
 	for _, a := range m.actions() {
 		ids[a.id] = a.enabled
 	}
-	if !ids["panel-access"] || !ids["panel"] || !ids["panel-tunnel"] {
+	if !ids["panel-access"] || !ids["panel"] {
 		t.Fatalf("hub actions: %v", ids)
 	}
-	if v, hint := m.panelLine(&cfg.Hubs[0]); !strings.Contains(v, "tail1234.ts.net") || !strings.Contains(hint, "T tunnel") {
+	if v, hint := m.panelLine(&cfg.Hubs[0]); !strings.Contains(v, "tail1234.ts.net") || !strings.Contains(hint, "p opens it") {
 		t.Fatal(v, hint)
 	}
 
@@ -197,9 +197,8 @@ func TestPanelKeyOpensDirectURLWithoutTunnel(t *testing.T) {
 	}
 }
 
-// T opens the SSH tunnel without asking Tailscale; a public URL opens
-// directly without a check.
-func TestPanelTunnelKeyAndPublicURL(t *testing.T) {
+// A public URL opens directly, without asking Tailscale.
+func TestPanelPublicURLSkipsTailnetCheck(t *testing.T) {
 	cfg := &config.Config{Hubs: []config.Hub{{ID: "hub-1", Mode: "public", Address: "hub.example.com:7443", SSHHost: "my-vps",
 		PanelAccess: &config.PanelAccess{Mode: config.PanelPublic, URL: "https://hub.example.com/", Domain: "hub.example.com"}}}, DefaultHub: "hub-1"}
 	var opened []string
@@ -208,14 +207,8 @@ func TestPanelTunnelKeyAndPublicURL(t *testing.T) {
 		TailnetCheck: func(context.Context, string) (bool, string) { checks++; return true, "" }})
 	m.width, m.height = 120, 30
 	m.Update(key("3"))
-	if cmd := m.togglePanel(); cmd != nil || len(opened) != 1 || checks != 0 {
+	if cmd := m.togglePanel(); cmd != nil || len(opened) != 1 || checks != 0 || m.panelPending {
 		t.Fatalf("public: cmd %v opened %v checks %d", cmd != nil, opened, checks)
-	}
-	if _, cmd := m.Update(key("T")); cmd == nil {
-		t.Fatal("T returned no tunnel command")
-	}
-	if !m.panelPending || m.panelNote != "" || checks != 0 {
-		t.Fatalf("T: pending %v note %q checks %d", m.panelPending, m.panelNote, checks)
 	}
 }
 

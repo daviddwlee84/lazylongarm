@@ -343,7 +343,7 @@ func (m *Model) openDirect(u, warn string) {
 	if warn != "" {
 		m.setStatus("warn", warn+"; opening "+u+" anyway (no SSH host for a tunnel)")
 	} else {
-		m.setStatus("ok", "panel: "+u+" ("+m.hub.PanelMode()+"; log in with a panel account + TOTP; T for the SSH tunnel)")
+		m.setStatus("ok", "panel: "+u+" ("+m.hub.PanelMode()+"; log in with a panel account + TOTP)")
 	}
 	if m.opts.OpenURL != nil {
 		_ = m.opts.OpenURL(u)
@@ -924,7 +924,6 @@ func (m *Model) actions() []action {
 		out = append(out,
 			action{"setup", map[bool]string{true: "rerun hub setup", false: "hub setup"}[hasHub], []string{"S"}, !m.toolBusy, func() tea.Cmd { return m.runTool("Hub setup", "hub", "setup") }},
 			action{"panel", map[bool]string{true: "close panel", false: "web panel"}[m.panel != nil], []string{"p"}, hasHub && (m.hub.SSHHost != "" || m.hub.PanelURL() != "") && !m.panelPending, func() tea.Cmd { return m.togglePanel() }},
-			action{"panel-tunnel", "SSH tunnel", []string{"T"}, hasHub && m.hub.SSHHost != "" && m.hub.PanelURL() != "" && m.panel == nil && !m.panelPending, func() tea.Cmd { return m.openTunnel("") }},
 			action{"panel-user", "panel logins", []string{"U"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel login", "hub", "panel-user") }},
 			action{"panel-access", "panel access", []string{"A"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel access", "hub", "panel-access") }},
 		)
