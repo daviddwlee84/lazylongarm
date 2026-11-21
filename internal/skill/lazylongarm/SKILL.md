@@ -24,6 +24,10 @@ plan.
 | Apply it | same plus `--yes --json` |
 | Preview a peer (worker + its own longarm as a client, so sessions there can dispatch) | `lazylongarm peer add <ssh-alias> [--client-name N] [--client-user U] --dry-run --json` (admin certificate needed; show the user the warnings) |
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
+| Users, and the fleet workers every user may use | `lazylongarm user ls --json` |
+| Preview making this machine an admin of your Longarm user | `lazylongarm user self <user> [--device D] --dry-run --json` (the first user separates users) |
+| Preview moving a fleet worker to a user | `lazylongarm worker add <ssh-alias> --reenroll --owner <user> --dry-run --json` |
+| Invite someone (writes a file with a one-time code; never paste it into chat) | `lazylongarm user invite <user> --out <file> --yes --json` (refuses while fleet workers exist) |
 | hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
 | Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
 | Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--answers defaults\|<preset>] [--update] --dry-run --json` (default `ask` needs the user's terminal) |
@@ -60,6 +64,12 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   first. Approved at the hub but no `~/.longarm/tls/node.crt` on the machine
   means longarmd there cannot reach the hub (proxy/TUN, firewall, or a clock
   that is far off; the probe warns above two minutes). Do not re-join it.
+- Users: the first user separates users, fleet workers stay usable by
+  everyone, and admin certificates get nothing on other users' owned
+  workers. Order: `user self` → `worker add --reenroll --owner` for each
+  fleet worker → `user remove <old certificate>` (no `--purge`) →
+  `user invite`. Ask the user before each step; `user remove --purge` deletes
+  job records.
 - Peer add does the same, then enrolls the machine's `longarm` as client
   `<worker>-client` (client join code over ssh stdin) and runs `longarm ls`
   there. Revoke with `longarm admin revoke <worker>-client`.

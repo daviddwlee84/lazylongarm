@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- `user self|invite|ls|remove`: share your hub with other people. `user self`
+  creates your Longarm user and switches this machine to an admin
+  certificate of it (old certificate backed up, panel login for `/link`
+  printed once); `user invite` adds someone with a one-time code and writes a
+  0600 Markdown invite (binaries and sha256, join, owned workers, privacy),
+  and refuses while fleet workers exist; `user remove` revokes a user's
+  devices and workers.
+- `worker add --owner USER`: an admin join code owned by that user (joins
+  approved, no approve step). It refuses when this machine acts as another
+  user or the user does not exist.
+- `worker add --reenroll` revokes the hub's node of that name after minting
+  the new code, keeps its labels and its owner (an owned worker never becomes
+  a fleet worker by accident), and restarts the service so longarmd loads
+  the new certificate (it previously kept the old identity until a restart).
+- `worker add` on a machine lazylongarm already manages keeps its saved
+  service mode (`system`/`user`) unless `--service` is given.
+- `worker ls` and the dashboard show one row per re-enrolled machine (its
+  live node; the hub also lists the revoked old one).
+- `worker ls` has an OWNER column (`fleet` for workers without one);
+  `status` shows the user on hubs that separate users, and `status --doctor`
+  warns about fleet workers and an admin certificate without a user record.
+- `peer add --client-user U` refuses once `U` has a device (upstream issues
+  user-bound codes for a user's first device only) and explains `longarm login`
+  with `/link` instead.
+
 ## v0.3.2 — 2026-11-21
 
 - `hub panel` and the dashboard's `p` open a tailnet panel URL only when this

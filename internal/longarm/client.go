@@ -127,9 +127,16 @@ func (c *Client) bin() (string, error) {
 
 // Run executes longarm with args and returns stdout.
 func (c *Client) Run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
+	out, _, err := c.run(ctx, timeout, stdin, args...)
+	return out, err
+}
+
+// run is Run that also returns stderr, where some admin commands print what
+// a person needs next (`admin user add`: the join line, a panel password).
+func (c *Client) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) ([]byte, []byte, error) {
 	bin, err := c.bin()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -146,17 +153,17 @@ func (c *Client) Run(ctx context.Context, timeout time.Duration, stdin []byte, a
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Run()
 	if err == nil {
-		return out.Bytes(), nil
+		return out.Bytes(), errb.Bytes(), nil
 	}
 	display := redactArgs(args)
 	if ctx.Err() != nil {
-		return out.Bytes(), &Error{Kind: KindUnknown, ExitCode: -1, Args: display, Stderr: "timed out after " + timeout.String()}
+		return out.Bytes(), errb.Bytes(), &Error{Kind: KindUnknown, ExitCode: -1, Args: display, Stderr: "timed out after " + timeout.String()}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		return out.Bytes(), &Error{Kind: kindFor(exit.ExitCode()), ExitCode: exit.ExitCode(), Args: display, Stderr: errb.String()}
+		return out.Bytes(), errb.Bytes(), &Error{Kind: kindFor(exit.ExitCode()), ExitCode: exit.ExitCode(), Args: display, Stderr: errb.String()}
 	}
-	return nil, fmt.Errorf("run longarm: %w", err)
+	return nil, nil, fmt.Errorf("run longarm: %w", err)
 }
 
 // Command returns an *exec.Cmd for interactive use (attach, logs -f, ssh).
@@ -316,6 +323,7 @@ type JoinCodeRequest struct {
 	Role   string // "worker" (default) or "client"
 	Name   string // fixed node name
 	User   string // client: the Longarm user the certificate belongs to ("" = the node's own name)
+	Owner  string // worker: the Longarm user who owns it (joins approved; "" = a fleet worker)
 	TTL    time.Duration
 	Labels []string // worker only
 }
@@ -349,6 +357,9 @@ func joinCodeArgs(req JoinCodeRequest) []string {
 	if req.User != "" && role != "worker" {
 		args = append(args, "--user", req.User)
 	}
+	if req.Owner != "" && role == "worker" {
+		args = append(args, "--owner", req.Owner)
+	}
 	if len(req.Labels) > 0 && role == "worker" {
 		args = append(args, "--labels", strings.Join(req.Labels, ","))
 	}
@@ -359,6 +370,155 @@ func joinCodeArgs(req JoinCodeRequest) []string {
 func (c *Client) AdminApprove(ctx context.Context, name string) error {
 	_, err := c.Run(ctx, 30*time.Second, nil, "admin", "approve", name)
 	return err
+}
+
+// AdminRevoke revokes a node and all its certificates; its name is free
+// again afterwards.
+func (c *Client) AdminRevoke(ctx context.Context, name string) error {
+	_, err := c.Run(ctx, 30*time.Second, nil, "admin", "revoke", name)
+	return err
+}
+
+// UserList is `longarm admin user ls --json` (protojson, proto names).
+type UserList struct {
+	Users   []User `json:"users"`
+	Tenancy bool   `json:"tenancy"`
+}
+
+// User is one Longarm user (multi-tenancy). Device names are not shown to
+// admins upstream, only counts.
+type User struct {
+	Name        string   `json:"name"`
+	Teams       []string `json:"teams"`
+	Disabled    bool     `json:"disabled"`
+	Panel       bool     `json:"panel"`
+	CanShare    bool     `json:"can_share"`
+	DeviceCount int      `json:"device_count"`
+	WorkerCount int      `json:"worker_count"`
+}
+
+// Find returns the user called name.
+func (l UserList) Find(name string) (User, bool) {
+	for _, u := range l.Users {
+		if u.Name == name {
+			return u, true
+		}
+	}
+	return User{}, false
+}
+
+// AdminUsers returns `longarm admin user ls --json`.
+func (c *Client) AdminUsers(ctx context.Context) (UserList, error) {
+	var l UserList
+	return l, c.json(ctx, &l, "admin", "user", "ls", "--json")
+}
+
+// UserAddRequest describes `longarm admin user add`.
+type UserAddRequest struct {
+	Name   string
+	Device string // node name of the first device ("" = upstream's default)
+	Admin  bool   // the first device gets an admin certificate
+	Panel  bool   // also create a web panel login
+	NoCode bool   // no join code
+	TTL    time.Duration
+	Quota  []string // upstream quota flags, e.g. "--max-jobs=8"
+}
+
+// UserAdded is what `longarm admin user add` printed: a join code for the
+// first device and, with Panel, a panel login shown only this once.
+type UserAdded struct {
+	Code     secret.Secret
+	Password secret.Secret
+	TOTP     secret.Secret
+	Otpauth  secret.Secret
+}
+
+// AdminUserAdd adds a Longarm user. The first user turns multi-tenancy on.
+func (c *Client) AdminUserAdd(ctx context.Context, req UserAddRequest) (UserAdded, error) {
+	out, errOut, err := c.run(ctx, 30*time.Second, nil, userAddArgs(req)...)
+	if err != nil {
+		return UserAdded{}, err
+	}
+	return parseUserAdded(string(out), string(errOut), req.NoCode)
+}
+
+// AdminUserCode prints a join code for the first device of an existing user
+// that has none yet (`longarm admin user code`; Panel, NoCode and Quota are
+// not used).
+func (c *Client) AdminUserCode(ctx context.Context, req UserAddRequest) (UserAdded, error) {
+	args := []string{"admin", "user", "code", req.Name}
+	if req.Device != "" {
+		args = append(args, "--device", req.Device)
+	}
+	if req.Admin {
+		args = append(args, "--admin")
+	}
+	if req.TTL > 0 {
+		args = append(args, "--ttl", req.TTL.String())
+	}
+	out, errOut, err := c.run(ctx, 30*time.Second, nil, args...)
+	if err != nil {
+		return UserAdded{}, err
+	}
+	return parseUserAdded(string(out), string(errOut), false)
+}
+
+func userAddArgs(req UserAddRequest) []string {
+	args := []string{"admin", "user", "add", req.Name}
+	if req.Device != "" {
+		args = append(args, "--device", req.Device)
+	}
+	if req.Admin {
+		args = append(args, "--admin")
+	}
+	if req.Panel {
+		args = append(args, "--panel")
+	}
+	if req.NoCode {
+		args = append(args, "--no-code")
+	} else if req.TTL > 0 {
+		args = append(args, "--ttl", req.TTL.String())
+	}
+	return append(args, req.Quota...)
+}
+
+// parseUserAdded reads upstream's output (cmd/longarm/users.go): the code is
+// stdout's only line ("added <name>" with --no-code); the panel login is on
+// stderr as "web panel login <u> (shown once): password <p>", "TOTP secret
+// <s>" and the otpauth URI.
+func parseUserAdded(stdout, stderr string, noCode bool) (UserAdded, error) {
+	var r UserAdded
+	if !noCode {
+		line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(stdout), "\n", 2)[0])
+		if line == "" || strings.ContainsAny(line, " \t") {
+			return r, errors.New("longarm admin user add printed no join code")
+		}
+		r.Code = secret.New(line)
+	}
+	for line := range strings.SplitSeq(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "web panel login "):
+			if _, pw, ok := strings.Cut(line, "password "); ok {
+				r.Password = secret.New(pw)
+			}
+		case strings.HasPrefix(line, "TOTP secret "):
+			r.TOTP = secret.New(strings.TrimPrefix(line, "TOTP secret "))
+		case strings.HasPrefix(line, "otpauth://"):
+			r.Otpauth = secret.New(line)
+		}
+	}
+	return r, nil
+}
+
+// AdminUserRemove removes a user and revokes all its devices and workers;
+// purge also makes workers delete its jobs, data and OS account.
+func (c *Client) AdminUserRemove(ctx context.Context, name string, purge bool) ([]byte, error) {
+	args := []string{"admin", "user", "remove", name}
+	if purge {
+		args = append(args, "--purge")
+	}
+	return c.Run(ctx, 30*time.Second, nil, args...)
 }
 
 // SkillAgent is one row of `longarm skill status --json`.
@@ -391,9 +551,29 @@ func (c *Client) Skill(ctx context.Context, verb, agent string) ([]byte, error) 
 // is passed as an argument because upstream has no stdin form; it is a
 // single-use, short-lived code and never logged by lazylongarm.
 func (c *Client) Join(ctx context.Context, address string, code secret.Secret, fingerprint string) ([]byte, error) {
+	return c.join(ctx, address, code, fingerprint, false)
+}
+
+// JoinForce is Join replacing the certificate this config directory holds
+// (a new identity on the same hub, e.g. a user-bound admin certificate).
+func (c *Client) JoinForce(ctx context.Context, address string, code secret.Secret, fingerprint string) ([]byte, error) {
+	return c.join(ctx, address, code, fingerprint, true)
+}
+
+// DaemonStop stops the background client daemon (it keeps the identity it
+// started with).
+func (c *Client) DaemonStop(ctx context.Context) error {
+	_, err := c.Run(ctx, 30*time.Second, nil, "daemon", "stop")
+	return err
+}
+
+func (c *Client) join(ctx context.Context, address string, code secret.Secret, fingerprint string, force bool) ([]byte, error) {
 	args := []string{"join", address, code.Reveal()}
 	if fingerprint != "" {
 		args = append(args, "--ca-fingerprint", fingerprint)
+	}
+	if force {
+		args = append(args, "--force")
 	}
 	out, err := c.Run(ctx, 90*time.Second, nil, args...)
 	if err != nil {

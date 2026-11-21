@@ -119,6 +119,17 @@ func TestHelperLongarm(t *testing.T) {
 	case "denied":
 		fmt.Fprintln(os.Stderr, "certificate expired")
 		os.Exit(77)
+	case "user-add":
+		// upstream cmd/longarm/users.go printJoinCode + printPanel
+		fmt.Println("K7Q2PX")
+		fmt.Fprintln(os.Stderr, "admin certificate alice-laptop for user alice, code expires 11-22 10:00")
+		fmt.Fprintln(os.Stderr, "on the user's machine: longarm join hub.example.com:7443 K7Q2PX --ca-fingerprint sha256:aa")
+		fmt.Fprintln(os.Stderr, "web panel login alice (shown once): password Tr0ub4dor-3")
+		fmt.Fprintln(os.Stderr, "TOTP secret JBSWY3DPEHPK3PXP")
+		fmt.Fprintln(os.Stderr, "otpauth://totp/Longarm:alice?secret=JBSWY3DPEHPK3PXP")
+	case "user-ls":
+		// protojson with proto names (upstream printJSON), int32 as numbers
+		fmt.Print(`{"users":[{"name":"alice","teams":["web"],"created_at":"2026-11-21T10:00:00Z","panel":true,"device_count":1,"worker_count":3},{"name":"bob","disabled":true}],"default_quota":{},"tenancy":true}`)
 	}
 	os.Exit(0)
 }
@@ -177,5 +188,54 @@ func TestAdminJoinCodeRoles(t *testing.T) {
 				t.Errorf("%+v: argv %q has %q", tc.req, argv, n)
 			}
 		}
+	}
+}
+
+func TestAdminUserAddParsesCodeAndPanel(t *testing.T) {
+	c := fakeLongarm(t, "user-add")
+	r, err := c.AdminUserAdd(context.Background(), UserAddRequest{Name: "alice", Device: "alice-laptop", Admin: true, Panel: true, TTL: 15 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Code.Reveal() != "K7Q2PX" || r.Password.Reveal() != "Tr0ub4dor-3" || r.TOTP.Reveal() != "JBSWY3DPEHPK3PXP" || !strings.HasPrefix(r.Otpauth.Reveal(), "otpauth://totp/") {
+		t.Fatalf("parsed %q %q %q %q", r.Code.Reveal(), r.Password.Reveal(), r.TOTP.Reveal(), r.Otpauth.Reveal())
+	}
+	if b, _ := json.Marshal(r); strings.Contains(string(b), "K7Q2PX") || strings.Contains(string(b), "Tr0ub4dor") {
+		t.Fatal("secrets leak through JSON")
+	}
+	argv := strings.Join(userAddArgs(UserAddRequest{Name: "alice", Device: "d1", Admin: true, Panel: true, TTL: time.Hour, Quota: []string{"--max-jobs=8"}}), " ")
+	if argv != "admin user add alice --device d1 --admin --panel --ttl 1h0m0s --max-jobs=8" {
+		t.Fatalf("argv %q", argv)
+	}
+	if argv := strings.Join(userAddArgs(UserAddRequest{Name: "bob", NoCode: true, TTL: time.Hour}), " "); argv != "admin user add bob --no-code" {
+		t.Fatalf("no-code argv %q", argv)
+	}
+	if _, err := parseUserAdded("added bob\n", "", false); err == nil {
+		t.Fatal("\"added bob\" taken for a code")
+	}
+}
+
+func TestAdminUsersDecodes(t *testing.T) {
+	c := fakeLongarm(t, "user-ls")
+	l, err := c.AdminUsers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := l.Find("alice")
+	if !l.Tenancy || !ok || a.DeviceCount != 1 || a.WorkerCount != 3 || !a.Panel || a.Teams[0] != "web" {
+		t.Fatalf("users %+v", l)
+	}
+	if b, _ := l.Find("bob"); !b.Disabled {
+		t.Fatalf("bob %+v", b)
+	}
+}
+
+func TestJoinCodeOwnerOnlyForWorkers(t *testing.T) {
+	argv := strings.Join(joinCodeArgs(JoinCodeRequest{Name: "w1", Owner: "alice", TTL: 15 * time.Minute}), " ")
+	if !strings.Contains(argv, "--role worker") || !strings.Contains(argv, "--owner alice") {
+		t.Fatalf("argv %q", argv)
+	}
+	if argv := strings.Join(joinCodeArgs(JoinCodeRequest{Role: "client", Name: "c1", Owner: "alice", TTL: time.Minute}), " "); strings.Contains(argv, "--owner") {
+		t.Fatalf("client code with --owner: %q", argv)
 	}
 }

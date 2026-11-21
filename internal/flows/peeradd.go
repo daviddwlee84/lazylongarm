@@ -29,6 +29,9 @@ type PeerRequest struct {
 	ClientUser string
 	// Tenancy reports whether the hub separates users (from whoami).
 	Tenancy bool
+	// ClientUserDevices is how many devices ClientUser already has: upstream
+	// only issues a user-bound code for a user's first device.
+	ClientUserDevices int
 }
 
 // PeerDefaults fills the worker defaults and the client name.
@@ -56,6 +59,14 @@ func ValidatePeer(req PeerRequest, f *hostprobe.Facts) error {
 	}
 	if req.Tenancy && req.ClientUser == "" {
 		problems = append(problems, "the hub separates users: pass --client-user (the Longarm user the machine acts as)")
+	}
+	if req.Tenancy && req.ClientUser != "" && req.ClientUserDevices > 0 {
+		addr := "<hub>"
+		if req.Hub != nil {
+			addr = req.Hub.Address
+		}
+		problems = append(problems, fmt.Sprintf("user %s already has a device, and the hub issues user-bound codes for a user's first device only: run `longarm login %s` on that machine and approve it at the panel's /link page with %s's panel login (panel on loopback: ssh -L 7480:127.0.0.1:7480 <hub host>), or drop the client part (`lazylongarm worker add`)",
+			req.ClientUser, addr, req.ClientUser))
 	}
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))

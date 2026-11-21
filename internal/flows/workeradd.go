@@ -50,9 +50,23 @@ type WorkerRequest struct {
 	// user; needs a user record on the hub).
 	Mint string
 	// Reenroll enrolls again although the machine already has a certificate
-	// (after `longarm admin revoke`, a lost key or a new hub CA).
+	// (after `longarm admin revoke`, a lost key or a new hub CA), and
+	// restarts the service so longarmd picks up the new identity (it only
+	// reloads certificates of the same node).
 	Reenroll bool
+	// Owner makes it a worker owned by this Longarm user: an admin join code
+	// with --owner, which joins approved and is usable by that user only.
+	// Needs an admin certificate (MintAdmin); the caller should act as the
+	// same user, or the new worker is invisible to it.
+	Owner string
+	// Replace is the hub's current node of this name, revoked right before
+	// the machine enrolls again (with Reenroll): node names are unique, and
+	// a fleet worker cannot become owned in place. It gets a new node ID.
+	Replace *longarm.Node
 }
+
+// userNameRE is upstream's rule for Longarm user names (internal/pki).
+var userNameRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,16}$`)
 
 // Join code sources.
 const (
@@ -121,6 +135,17 @@ func ValidateWorker(req WorkerRequest, f *hostprobe.Facts) error {
 	if !validFetch(req.Fetch) {
 		problems = append(problems, fmt.Sprintf("fetch %q must be auto, push or remote", req.Fetch))
 	}
+	if req.Owner != "" {
+		if !userNameRE.MatchString(req.Owner) {
+			problems = append(problems, fmt.Sprintf("owner %q is not a Longarm user name (lowercase letter first, then a-z 0-9 _ -, at most 17)", req.Owner))
+		}
+		if req.Mint != MintAdmin {
+			problems = append(problems, "--owner mints an admin join code, which needs an admin certificate (or drop --owner: `longarm worker add` makes a worker owned by you)")
+		}
+	}
+	if req.Replace != nil && !req.Reenroll {
+		problems = append(problems, fmt.Sprintf("worker %s is already on the hub: pass --reenroll to replace it", req.Name))
+	}
 	if f != nil {
 		if f.OS != "linux" && f.OS != "darwin" {
 			problems = append(problems, "workers on "+f.OS+" are not supported by lazylongarm yet")
@@ -187,14 +212,25 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 			{"fetch", fetchSummary(req.Fetch, host)},
 			{"service", svcDesc},
 			{"reachable", path},
-			{"ownership", map[string]string{MintAdmin: "fleet worker (admin join code, approved by you right after it joins)", MintOwner: "your own worker: only you can run jobs on it until you share it"}[req.Mint]},
+			{"ownership", ownership(req)},
 		},
 	}
 	if len(req.Labels) > 0 {
 		p.Summary = append(p.Summary, [2]string{"labels", strings.Join(req.Labels, ", ")})
 	}
+	if r := req.Replace; r != nil {
+		p.Summary = append(p.Summary, [2]string{"replaces", fmt.Sprintf("node %s (id %s, %s): revoked right before the machine enrolls again", r.Name, shortID(r.ID), ownerText(r.Owner))})
+		p.Warnings = append(p.Warnings, fmt.Sprintf("%s gets a new node ID and is offline between the revoke and the service restart; its port links are removed, and its job history stays with the old ID", req.Name))
+	}
+	if req.Reenroll {
+		p.Warnings = append(p.Warnings, "the service restarts to pick up the new certificate: jobs keep running, sessions and forwards through it reconnect")
+	}
 	if req.Service == ServiceSystem && f.Sudo == "password" {
-		p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: the service step hands the terminal to sudo")
+		if req.Reenroll {
+			p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: needed only if longarmd does not come back by itself (then the service step hands the terminal to sudo)")
+		} else {
+			p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: the service step hands the terminal to sudo")
+		}
 	}
 	if f.OS == "darwin" {
 		p.Warnings = append(p.Warnings, "macOS workers run jobs as "+f.User+" (no per-user isolation on macOS)")
@@ -255,13 +291,21 @@ fi`, strings.Split(hub.Address, ":")[0])
 			if req.Mint == MintOwner {
 				code, err = deps.Client.WorkerAdd(ctx, req.Name, 15*time.Minute, req.Labels)
 			} else {
-				code, err = deps.Client.AdminJoinCode(ctx, longarm.JoinCodeRequest{Role: "worker", Name: req.Name, TTL: 15 * time.Minute, Labels: req.Labels})
+				code, err = deps.Client.AdminJoinCode(ctx, longarm.JoinCodeRequest{Role: "worker", Name: req.Name, Owner: req.Owner, TTL: 15 * time.Minute, Labels: req.Labels})
 			}
 			if err != nil {
 				return err
 			}
 			env.SetSecret("worker_code", code)
 			env.Logf("  minted a one-time worker code (valid 15 min)")
+			// Revoke only once the code exists: a failed mint leaves the
+			// old node working. A rerun finds it gone (not found is fine).
+			if req.Replace != nil {
+				if err := deps.Client.AdminRevoke(ctx, req.Name); err != nil && longarm.KindOf(err) != longarm.KindNotFound {
+					return err
+				}
+				env.Logf("  revoked the old node %s (id %s)", req.Name, shortID(req.Replace.ID))
+			}
 			r := run(`set -eu
 IFS= read -r code
 if [ "$5" = force ]; then exec "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$4" --no-wait --force; fi
@@ -271,7 +315,7 @@ exec "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$4" --no-wait`, longar
 			if _, err := env.Run(ctx, r); err != nil {
 				return &plan.UnknownError{Err: err}
 			}
-			if req.Mint == MintAdmin && !hubAutoApproves(hub) {
+			if needsApproval(req) && !hubAutoApproves(hub) {
 				return approve(ctx, env, deps, req.Name)
 			}
 			return nil
@@ -283,22 +327,61 @@ exec "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$4" --no-wait`, longar
 	for _, l := range listen {
 		installArgs = append(installArgs, "--listen", l)
 	}
+	restart := map[bool]string{true: "restart", false: "-"}[req.Reenroll]
 	switch req.Service {
 	case ServiceSystem:
 		display := fmt.Sprintf("%s service install --user %s%s\n%s service start", longarmdPath, f.User, joinArgs(installArgs), longarmdPath)
+		if req.Reenroll {
+			display = fmt.Sprintf("end the running longarmd (as %s, no sudo): systemd/launchd start it again with the new certificate;\nif that does not work: %s service stop + start (sudo); not running: %s", f.User, longarmdPath, display)
+		}
 		p.Steps = append(p.Steps, plan.Step{
-			ID: "service", Title: "Install and start the longarmd service", Idempotent: true,
+			ID: "service", Title: map[bool]string{true: "Restart the longarmd service with the new certificate", false: "Install and start the longarmd service"}[req.Reenroll], Idempotent: true,
 			Actions: []plan.Action{{Where: where, Privileged: true, Display: display}},
 			Check: func(ctx context.Context, env *plan.Env) (bool, error) {
+				if req.Reenroll {
+					return false, nil
+				}
 				r := run(`if command -v systemctl >/dev/null 2>&1; then systemctl is-active --quiet longarmd || systemctl is-active --quiet "longarmd@$(id -un)"; else launchctl print system/com.longarm.longarmd >/dev/null 2>&1; fi`)
 				r.Timeout = 30 * time.Second
 				_, err := env.RunQuiet(ctx, r)
 				return checkResult(err)
 			},
 			Apply: func(ctx context.Context, env *plan.Env) error {
-				args := append([]string{longarmdPath, f.User}, installArgs...)
+				if req.Reenroll {
+					// The service runs longarmd as the SSH user, and both
+					// unit (Restart=always, KillMode=process: jobs survive)
+					// and LaunchDaemon (KeepAlive) start it again, so ending
+					// it needs no sudo.
+					r := run(`pat='` + userDaemonPattern + `'
+old=$(pgrep -u "$(id -u)" -f "$pat" | head -n 1)
+[ -n "$old" ] || exit 3
+kill "$old"
+i=0
+while [ "$i" -lt 30 ]; do
+  sleep 1
+  new=$(pgrep -u "$(id -u)" -f "$pat" | head -n 1)
+  if [ -n "$new" ] && [ "$new" != "$old" ]; then echo "longarmd restarted by the service manager (pid $old -> $new)"; exit 0; fi
+  i=$((i+1))
+done
+exit 4`)
+					r.Timeout = 60 * time.Second
+					if _, err := env.Run(ctx, r); err == nil {
+						return nil
+					}
+					env.Logf("  longarmd did not come back by itself; stopping and starting the service (sudo)")
+				}
+				args := append([]string{longarmdPath, f.User, restart}, installArgs...)
 				_, err := env.RunPrivileged(ctx, run(`set -eu
-bin="$1"; user="$2"; shift 2
+bin="$1"; user="$2"; restart="$3"; shift 3
+running() {
+  if command -v systemctl >/dev/null 2>&1; then systemctl is-active --quiet longarmd || systemctl is-active --quiet "longarmd@$user"
+  else launchctl print system/com.longarm.longarmd >/dev/null 2>&1; fi
+}
+if [ "$restart" = restart ] && running; then
+  "$bin" service stop || true
+  "$bin" service start
+  exit 0
+fi
 "$bin" service install --user "$user" "$@"
 "$bin" service start`, args...))
 				return err
@@ -307,17 +390,24 @@ bin="$1"; user="$2"; shift 2
 	case ServiceUser:
 		p.Steps = append(p.Steps, plan.Step{
 			ID: "service", Title: "Start longarmd in the background as " + f.User, Idempotent: true,
-			Actions: []plan.Action{{Where: where, Display: fmt.Sprintf("nohup %s run%s >> ~/.longarm/longarmd.out &", longarmdPath, joinArgs(installArgs))}},
+			Actions: []plan.Action{{Where: where, Display: fmt.Sprintf("%snohup %s run%s >> ~/.longarm/longarmd.out &", map[bool]string{true: "stop the running longarmd (new certificate), then ", false: ""}[req.Reenroll], longarmdPath, joinArgs(installArgs))}},
 			Check: func(ctx context.Context, env *plan.Env) (bool, error) {
+				if req.Reenroll {
+					return false, nil
+				}
 				r := run(`pgrep -u "$(id -u)" -f '` + userDaemonPattern + `' >/dev/null 2>&1`)
 				r.Timeout = 30 * time.Second
 				_, err := env.RunQuiet(ctx, r)
 				return checkResult(err)
 			},
 			Apply: func(ctx context.Context, env *plan.Env) error {
-				args := append([]string{longarmdPath}, installArgs...)
+				args := append([]string{longarmdPath, restart}, installArgs...)
 				_, err := env.Run(ctx, run(`set -eu
-bin="$1"; shift
+bin="$1"; restart="$2"; shift 2
+if [ "$restart" = restart ]; then
+  pkill -u "$(id -u)" -f '`+userDaemonPattern+`' 2>/dev/null || true
+  sleep 1
+fi
 mkdir -p "$HOME/.longarm"
 if command -v setsid >/dev/null 2>&1; then
   setsid nohup "$bin" run "$@" >>"$HOME/.longarm/longarmd.out" 2>&1 </dev/null &
@@ -343,7 +433,7 @@ echo "longarmd started (pid $!)"`, args...))
 			for {
 				list, err := deps.Client.Workers(ctx)
 				if err == nil {
-					if n, ok := findNode(list.Nodes, req.Name); ok {
+					if n, ok := findNode(list.Nodes, req.Name, replacedID(req)); ok {
 						state := n.State
 						if n.State == "approved" {
 							hubApproved = true
@@ -358,7 +448,7 @@ echo "longarmd started (pid $!)"`, args...))
 							return nil
 						}
 						if n.State == "pending" {
-							if req.Mint == MintAdmin && !approved {
+							if needsApproval(req) && !approved {
 								approved = true
 								if err := deps.Client.AdminApprove(ctx, req.Name); err != nil {
 									env.Logf("  ! longarm admin approve %s: %v", req.Name, err)
@@ -433,21 +523,62 @@ func enrollActions(req WorkerRequest, where string, hub *config.Hub) []plan.Acti
 		force = " --force"
 	}
 	join := plan.Action{Where: where, Display: fmt.Sprintf("longarmd join %s <code from stdin> --ca-fingerprint %s --name %s --no-wait%s", hub.Address, shortFP(hub.CAFingerprint), req.Name, force)}
+	var revoke []plan.Action
+	if r := req.Replace; r != nil {
+		revoke = []plan.Action{{Where: "local", Display: fmt.Sprintf("longarm admin revoke %s   (old node id %s, %s)", req.Name, shortID(r.ID), ownerText(r.Owner))}}
+	}
 	if req.Mint == MintOwner {
-		return []plan.Action{
+		return append(append([]plan.Action{
 			{Where: "local", Display: fmt.Sprintf("longarm worker add %s --ttl 15m%s   → one-time code (pre-approved, owned by you)", req.Name, labelArgs(req.Labels))},
-			join,
-		}
+		}, revoke...), join)
 	}
 	labels := ""
 	if len(req.Labels) > 0 {
 		labels = " --labels " + strings.Join(req.Labels, ",")
 	}
-	return []plan.Action{
-		{Where: "local", Display: fmt.Sprintf("longarm admin join-code --role worker --name %s --ttl 15m%s   → one-time code", req.Name, labels)},
-		join,
-		{Where: "local", Display: "longarm admin approve " + req.Name},
+	if req.Owner != "" {
+		return append(append([]plan.Action{
+			{Where: "local", Display: fmt.Sprintf("longarm admin join-code --role worker --owner %s --name %s --ttl 15m%s   → one-time code (pre-approved)", req.Owner, req.Name, labels)},
+		}, revoke...), join)
 	}
+	return append(append([]plan.Action{
+		{Where: "local", Display: fmt.Sprintf("longarm admin join-code --role worker --name %s --ttl 15m%s   → one-time code", req.Name, labels)},
+	}, revoke...), join, plan.Action{Where: "local", Display: "longarm admin approve " + req.Name})
+}
+
+func replacedID(req WorkerRequest) string {
+	if req.Replace == nil {
+		return ""
+	}
+	return req.Replace.ID
+}
+
+// needsApproval: a fleet worker joins pending; owned ones join approved.
+func needsApproval(req WorkerRequest) bool { return req.Mint == MintAdmin && req.Owner == "" }
+
+func ownership(req WorkerRequest) string {
+	switch {
+	case req.Owner != "":
+		return fmt.Sprintf("owned by %s: only %s (and whom %s shares it with) can use it; it joins approved", req.Owner, req.Owner, req.Owner)
+	case req.Mint == MintOwner:
+		return "your own worker: only you can run jobs on it until you share it"
+	default:
+		return "fleet worker (admin join code, approved by you right after it joins): every user of the hub may use it"
+	}
+}
+
+func ownerText(owner string) string {
+	if owner == "" {
+		return "fleet worker"
+	}
+	return "owned by " + owner
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // approve waits for the joining node to be registered, then approves it.
@@ -475,9 +606,11 @@ func approve(ctx context.Context, env *plan.Env, deps WorkerDeps, name string) e
 // hubAutoApproves is unknown for hubs we did not set up; assume approval is needed.
 func hubAutoApproves(*config.Hub) bool { return false }
 
-func findNode(nodes []longarm.Node, name string) (longarm.Node, bool) {
+// findNode returns the live worker called name, skipping the node it
+// replaces (skipID) while the hub still lists that one.
+func findNode(nodes []longarm.Node, name, skipID string) (longarm.Node, bool) {
 	for _, n := range nodes {
-		if n.Name == name && n.IsWorker() {
+		if n.Name == name && n.IsWorker() && n.State != "revoked" && (skipID == "" || n.ID != skipID) {
 			return n, true
 		}
 	}

@@ -137,7 +137,11 @@ back with `longarm admin revoke <worker>-client`.
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags; `--fetch auto\|push\|remote`) |
 | `peer add [host] \| --local` | a worker whose own longarm is also enrolled as a client (`--client-name`, `--client-user`) |
-| `worker ls` | hub registry merged with machines lazylongarm manages |
+| `worker add HOST --reenroll --owner USER` | move a fleet worker to a Longarm user (new owner code, old node revoked, service restarted, labels kept) |
+| `worker ls` | hub registry merged with machines lazylongarm manages (OWNER: a user, or `fleet`) |
+| `user self USER [--device D]` | create your Longarm user and switch this machine to an admin certificate of it (old one backed up; panel login for `/link`) |
+| `user invite USER [--out FILE]` | add a user and write an invite with install, join and worker steps; refuses while fleet workers exist |
+| `user ls` / `user remove USER [--purge]` | users with device/worker counts and the fleet workers everyone may use; revoke a user's devices and workers |
 | `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
 | `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer |
 | `companion dotfiles [machine…] \| --all` | bootstrap (or `--update`) chezmoi dotfiles on fleet machines |

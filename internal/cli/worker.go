@@ -68,7 +68,8 @@ the plan from flags. Rerunning skips steps that are already in place.`,
 		Example: `  lazylongarm worker add
   lazylongarm worker add build-box --label gpu=none
   lazylongarm worker add build-box --fetch push   # build-box cannot reach GitHub
-  lazylongarm worker add --local --service user --yes`,
+  lazylongarm worker add --local --service user --yes
+  lazylongarm worker add build-box --reenroll --owner alice   # fleet worker → owned by alice`,
 	})
 }
 
@@ -93,6 +94,14 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 		f.req.Hub = hub
 		if f.req.Version == "" {
 			f.req.Version = hub.Version
+		}
+		if !cmd.Flags().Changed("service") {
+			// A machine lazylongarm already manages keeps its service mode:
+			// re-enrolling a user-mode daemon as a system service would end
+			// the daemon and then need sudo to install a unit.
+			if t, ok := knownTarget(o.cfg, f.req.Host, f.local); ok && t.Service != "" {
+				f.req.Service = t.Service
+			}
 		}
 		bare := f.req.Host == "" && !f.local
 		if f.interactive || bare {
@@ -126,7 +135,8 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 	fl.StringArrayVar(&f.req.Labels, "label", nil, "worker label KEY=VALUE (repeatable)")
 	fl.StringVar(&f.req.Service, "service", flows.ServiceSystem, "system (service via sudo, survives reboots) | user (background process, no sudo)")
 	fl.BoolVar(&f.req.DirectTailnet, "direct-tailnet", false, "also listen on the machine's tailnet IP for direct connections")
-	fl.BoolVar(&f.req.Reenroll, "reenroll", false, "enroll again although the machine has a certificate (after a revoke or a lost key)")
+	fl.BoolVar(&f.req.Reenroll, "reenroll", false, "enroll again although the machine has a certificate: revokes the hub's node of that name, keeps its labels and restarts the service")
+	fl.StringVar(&f.req.Owner, "owner", "", "make it a worker owned by this Longarm user (admin join code with --owner; with --reenroll it moves a fleet worker to the user)")
 	if f.peer {
 		fl.StringVar(&f.clientName, "client-name", "", "client node name (default: <worker name>-client; node names are unique on the hub)")
 		fl.StringVar(&f.clientUser, "client-user", "", "Longarm user the client certificate belongs to (required once the hub separates users)")
@@ -152,7 +162,7 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 	}
 	client := &longarm.Client{ConfigDir: req.Hub.ConfigDir}
 	var who longarm.WhoAmI
-	if req.Mint == "" || f.peer {
+	if req.Mint == "" || f.peer || req.Owner != "" || req.Reenroll {
 		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		who, _ = client.WhoAmI(wctx)
 		cancel()
@@ -164,6 +174,14 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 		if who.Role == "admin" {
 			req.Mint = flows.MintAdmin
 		}
+	}
+	if req.Name == "" {
+		// The default name (SSH alias / hostname) is needed to find the
+		// node a --reenroll replaces.
+		req.Name = flows.WorkerDefaults(flows.WorkerRequest{Host: req.Host}, facts).Name
+	}
+	if err := resolveOwnerAndReplace(ctx, client, who, &req); err != nil {
+		return nil, err
 	}
 	deps := flows.WorkerDeps{
 		Config:   o.cfg,
@@ -177,9 +195,100 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 		},
 	}
 	if f.peer {
-		return flows.BuildPeerAdd(flows.PeerRequest{WorkerRequest: req, ClientName: f.clientName, ClientUser: f.clientUser, Tenancy: who.Tenancy}, facts, deps)
+		pr := flows.PeerRequest{WorkerRequest: req, ClientName: f.clientName, ClientUser: f.clientUser, Tenancy: who.Tenancy}
+		if who.Tenancy && f.clientUser != "" {
+			// A user-bound code only enrolls a user's first device.
+			uctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			users, err := client.AdminUsers(uctx)
+			cancel()
+			if err == nil {
+				if u, ok := users.Find(f.clientUser); ok {
+					pr.ClientUserDevices = u.DeviceCount
+				}
+			}
+		}
+		return flows.BuildPeerAdd(pr, facts, deps)
 	}
 	return flows.BuildWorkerAdd(req, facts, deps)
+}
+
+// knownTarget is the saved target of this SSH host (or of this machine).
+func knownTarget(cfg *config.Config, host string, local bool) (config.Target, bool) {
+	for _, t := range cfg.Targets {
+		if (host != "" && t.SSHHost == host) || (local && host == "" && t.SSHHost == "") {
+			if t.Service == flows.ServiceSystem || t.Service == flows.ServiceUser {
+				return t, true
+			}
+		}
+	}
+	return config.Target{}, false
+}
+
+// resolveOwnerAndReplace finds, for --reenroll, the node the machine
+// replaces (keeping its labels and its owner: re-enrolling an owned worker
+// without --owner must not turn it into a fleet worker every user may use),
+// then checks the owner against the hub.
+func resolveOwnerAndReplace(ctx context.Context, client *longarm.Client, who longarm.WhoAmI, req *flows.WorkerRequest) error {
+	if req.Reenroll && req.Name != "" {
+		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		list, err := client.Workers(wctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("look up worker %s on the hub: %w", req.Name, err)
+		}
+		for _, n := range list.Nodes {
+			if n.Name != req.Name || !n.IsWorker() || n.State == "revoked" {
+				continue
+			}
+			if req.Owner != "" && n.Owner == req.Owner {
+				return fmt.Errorf("worker %s is already owned by %s; nothing to move (to enroll it again anyway: `longarm admin revoke %s`, then --reenroll)", req.Name, req.Owner, req.Name)
+			}
+			if req.Owner == "" && n.Owner != "" {
+				if req.Mint == flows.MintOwner && n.Owner != who.User {
+					return fmt.Errorf("worker %s is owned by %s; `longarm worker add` would make it %s's: pass --owner %s with an admin certificate", req.Name, n.Owner, dash(who.User), n.Owner)
+				}
+				if req.Mint == flows.MintAdmin {
+					req.Owner = n.Owner // keep it owned
+				}
+			}
+			node := n
+			req.Replace = &node
+			if len(req.Labels) == 0 {
+				req.Labels = carriedLabels(n.Labels)
+			}
+			break
+		}
+	}
+	if req.Owner == "" {
+		return nil
+	}
+	if who.User != "" && who.User != req.Owner {
+		return fmt.Errorf("this machine's longarm acts as user %q: a worker owned by %q would be invisible to it, and admins are not exempt on owned workers; switch first (`lazylongarm user self %s`)", who.User, req.Owner, req.Owner)
+	}
+	uctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	users, err := client.AdminUsers(uctx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("check user %q on the hub: %w", req.Owner, err)
+	}
+	if _, ok := users.Find(req.Owner); !ok {
+		return fmt.Errorf("the hub has no user %q (owners are users): `lazylongarm user self %s` creates yours", req.Owner, req.Owner)
+	}
+	return nil
+}
+
+// carriedLabels are a replaced node's labels minus the ones every worker
+// reports itself (os, arch) and the hub's own (longarm.io/...).
+func carriedLabels(m map[string]string) []string {
+	var out []string
+	for k, v := range m {
+		if k == "os" || k == "arch" || strings.HasPrefix(k, "longarm.io/") {
+			continue
+		}
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (o *options) finishWorkerAdd(cmd *cobra.Command, p *plan.Plan, f *workerAddFlags) error {
@@ -383,9 +492,13 @@ func workerListCommand(o *options) *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "! hub registry unavailable: %v\n", lerr)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "WORKER\tSTATE\tPATH\tPLATFORM\tCPU%\tMEM%\tJOBS\tSSH\tVERSION\tLABELS")
+			fmt.Fprintln(tw, "WORKER\tSTATE\tOWNER\tPATH\tPLATFORM\tCPU%\tMEM%\tJOBS\tSSH\tVERSION\tLABELS")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f\t%.0f\t%d\t%s\t%s\t%s\n", r.Name, r.State, dash(r.Path), dash(r.Platform), r.CPU, r.Mem, r.Jobs, dash(r.SSHHost), dash(r.Version), dash(r.LabelText()))
+				owner := r.Owner
+				if owner == "" && r.InHub {
+					owner = "fleet"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%.0f\t%.0f\t%d\t%s\t%s\t%s\n", r.Name, r.State, dash(owner), dash(r.Path), dash(r.Platform), r.CPU, r.Mem, r.Jobs, dash(r.SSHHost), dash(r.Version), dash(r.LabelText()))
 			}
 			return tw.Flush()
 		},
