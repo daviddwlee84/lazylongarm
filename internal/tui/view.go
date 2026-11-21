@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/fleet"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
@@ -360,7 +361,7 @@ func (m *Model) hubLines(w int) []string {
 		kv("address", h.Address),
 		kv("mode", h.Mode),
 		kv("ssh host", dash(h.SSHHost)),
-		kv("panel", m.panelLine(h.Panel)),
+		kv("panel", m.panelLine(h)),
 		kv("fingerprint", h.CAFingerprint),
 		kv("version", dash(h.Version)),
 	}
@@ -389,11 +390,14 @@ func (m *Model) hubLines(w int) []string {
 	return lines
 }
 
-func (m *Model) panelLine(remote string) string {
+func (m *Model) panelLine(h *config.Hub) string {
 	if u := m.PanelURL(); u != "" {
 		return m.st("10", u) + m.st("8", "  (tunnel open · p closes)")
 	}
-	return dash(remote) + m.st("8", "  (p opens a tunnel + browser · U creates a login)")
+	if u := h.PanelURL(); u != "" {
+		return m.st("10", u) + m.st("8", "  ("+h.PanelMode()+" · p opens · A changes access · U creates a login)")
+	}
+	return dash(h.Panel) + m.st("8", "  (p opens a tunnel + browser · A panel access · U creates a login)")
 }
 
 func (m *Model) mark(status string) string {

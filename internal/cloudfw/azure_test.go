@@ -57,3 +57,13 @@ func TestCreateArgsAndParseNSG(t *testing.T) {
 		t.Fatal("deleting a foreign rule must be refused")
 	}
 }
+
+func TestPanelRules(t *testing.T) {
+	got := Names(PanelRules(true))
+	if len(got) != 2 || got[0] != "lazylongarm-panel-https" || got[1] != "lazylongarm-panel-http" {
+		t.Fatalf("%v", got)
+	}
+	if only := PanelRules(false); len(only) != 1 || only[0].Ports != "443" || only[0].Protocol != "Tcp" {
+		t.Fatalf("%+v", only)
+	}
+}

@@ -50,7 +50,7 @@ func TestHubPlanSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "apt-repo,install-hub,data-dir,hub-config,bootstrap,service,fingerprint,ports,reachability,save-hub,local-longarm,enroll-client"
+	want := "apt-repo,install-hub,data-dir,hub-config,bootstrap,service,restart-hub,fingerprint,ports,reachability,save-hub,local-longarm,enroll-client"
 	if got := ids(p); got != want {
 		t.Fatalf("steps\n got %s\nwant %s", got, want)
 	}

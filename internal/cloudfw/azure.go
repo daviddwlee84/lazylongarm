@@ -71,6 +71,25 @@ func HubRules(port, stun2 int) []Want {
 	}
 }
 
+// PanelRules are the inbound rules the built-in HTTPS panel needs: 443/tcp
+// (TLS-ALPN-01 certificate checks + the panel) and, with redirect, 80/tcp.
+func PanelRules(redirect bool) []Want {
+	out := []Want{{Name: RulePrefix + "panel-https", Protocol: "Tcp", Ports: "443", Purpose: "longarm-hub web panel over HTTPS (Let's Encrypt TLS-ALPN-01)"}}
+	if redirect {
+		out = append(out, Want{Name: RulePrefix + "panel-http", Protocol: "Tcp", Ports: "80", Purpose: "longarm-hub web panel: http -> https redirect"})
+	}
+	return out
+}
+
+// Names lists the rule names of wants.
+func Names(wants []Want) []string {
+	out := make([]string, 0, len(wants))
+	for _, w := range wants {
+		out = append(out, w.Name)
+	}
+	return out
+}
+
 func az(ctx context.Context, v any, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()

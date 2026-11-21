@@ -173,8 +173,20 @@ func BuildHubSetup(req HubRequest, f *hostprobe.Facts, deps HubDeps) (*plan.Plan
 	if err := ValidateHub(req, f); err != nil {
 		return nil, err
 	}
+	hubID := config.Slug(req.Name)
+	if hubID == "" {
+		hubID = "hub"
+	}
+	var existing *config.Hub
+	if deps.Config != nil {
+		if old, ok := deps.Config.Hub(hubID); ok && old.ID == hubID {
+			existing = old
+		}
+	}
 	settings := HubSettings(req)
-	content := hubhost.Render(settings)
+	if existing != nil {
+		settings = withPanelAccess(settings, existing.PanelAccess)
+	}
 	host := req.Host
 	p := &plan.Plan{
 		Kind:  "hub-setup",
@@ -185,7 +197,7 @@ func BuildHubSetup(req HubRequest, f *hostprobe.Facts, deps HubDeps) (*plan.Plan
 			{"mode", req.Mode},
 			{"nodes dial", settings.PublicAddr},
 			{"ports", fmt.Sprintf("%d/tcp (gRPC mTLS + relay TLS), %d/udp (QUIC), %d/udp (STUN)", settings.Port, settings.Port, settings.Stun2)},
-			{"panel", settings.Panel + " (loopback; open with `lazylongarm hub panel`)"},
+			{"panel", panelSummary(settings, existing)},
 			{"approval", map[bool]string{true: "auto-approve joining workers", false: "admin approval (owned workers join pre-approved)"}[req.AutoApprove]},
 			{"install", "official apt repository + systemd unit (no docker)"},
 		},
@@ -213,58 +225,19 @@ func BuildHubSetup(req HubRequest, f *hostprobe.Facts, deps HubDeps) (*plan.Plan
 		p.Warnings = append(p.Warnings, "if this machine routes traffic through a proxy TUN (e.g. Clash/mihomo), add a DIRECT rule for "+req.Address+" or the reachability check may lie")
 	}
 
-	run := func(script string, args ...string) connection.Request {
-		return connection.Request{Host: host, Script: script, Args: args, Timeout: 5 * time.Minute}
+	run := remote(host)
+	p.Steps = append(p.Steps, aptRepoStep("apt-repo", "Add the official Longarm apt repository (signing key verified)", host,
+		hubhost.AptKeyURL, hubhost.AptKeyFingerprint, hubhost.AptKeyring, hubhost.AptSources, hubhost.AptSourcesContent()))
+	install := aptInstallStep("install-hub", "Install the longarm-hub package", host, "longarm-hub", "apt-get install -y longarm-hub   (creates user longarm-hub, unit longarm-hub.service)")
+	install.Verify = func(ctx context.Context, env *plan.Env) error {
+		res, err := env.RunQuiet(ctx, run(`dpkg-query -W -f='${Version}' longarm-hub`))
+		if err == nil {
+			env.Set("hub_version", strings.TrimSpace(string(res.Stdout)))
+			env.Logf("  longarm-hub %s installed", env.Get("hub_version"))
+		}
+		return err
 	}
-	keyScript := `set -eu
-install -d -m 0755 /etc/apt/keyrings
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-curl -fsSL "$1" -o "$tmp"
-fpr=$(gpg --show-keys --with-colons "$tmp" 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')
-if [ "$fpr" != "$2" ]; then echo "unexpected apt signing key fingerprint: $fpr" >&2; exit 1; fi
-install -m 0644 "$tmp" "$3"
-printf '%s' "$5" > "$4.tmp" && chmod 0644 "$4.tmp" && mv "$4.tmp" "$4"
-echo "repository key $fpr verified"
-DEBIAN_FRONTEND=noninteractive apt-get update -qq
-echo "apt index updated"`
-	p.Steps = append(p.Steps, plan.Step{
-		ID: "apt-repo", Title: "Add the official Longarm apt repository (signing key verified)", Idempotent: true,
-		Actions: []plan.Action{{Where: host, Privileged: true, Display: fmt.Sprintf("curl %s → verify fingerprint %s → %s\nwrite %s; apt-get update", hubhost.AptKeyURL, hubhost.AptKeyFingerprint, hubhost.AptKeyring, hubhost.AptSources)}},
-		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
-			r := run(`test -s "$1" && test -s "$2"`, hubhost.AptKeyring, hubhost.AptSources)
-			r.Timeout = 30 * time.Second
-			_, err := env.RunQuiet(ctx, r)
-			return checkResult(err)
-		},
-		Apply: func(ctx context.Context, env *plan.Env) error {
-			r := run(keyScript, hubhost.AptKeyURL, hubhost.AptKeyFingerprint, hubhost.AptKeyring, hubhost.AptSources, hubhost.AptSourcesContent())
-			_, err := env.RunPrivileged(ctx, r)
-			return err
-		},
-	})
-	p.Steps = append(p.Steps, plan.Step{
-		ID: "install-hub", Title: "Install the longarm-hub package", Idempotent: true,
-		Actions: []plan.Action{{Where: host, Privileged: true, Display: "apt-get install -y longarm-hub   (creates user longarm-hub, unit longarm-hub.service)"}},
-		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
-			r := run(`dpkg-query -W -f='${Status}' longarm-hub 2>/dev/null | grep -q 'install ok installed'`)
-			r.Timeout = 30 * time.Second
-			_, err := env.RunQuiet(ctx, r)
-			return checkResult(err)
-		},
-		Apply: func(ctx context.Context, env *plan.Env) error {
-			_, err := env.RunPrivileged(ctx, run(`DEBIAN_FRONTEND=noninteractive apt-get install -y -q longarm-hub`))
-			return err
-		},
-		Verify: func(ctx context.Context, env *plan.Env) error {
-			res, err := env.RunQuiet(ctx, run(`dpkg-query -W -f='${Version}' longarm-hub`))
-			if err == nil {
-				env.Set("hub_version", strings.TrimSpace(string(res.Stdout)))
-				env.Logf("  longarm-hub %s installed", env.Get("hub_version"))
-			}
-			return err
-		},
-	})
+	p.Steps = append(p.Steps, install)
 
 	p.Steps = append(p.Steps, plan.Step{
 		ID: "data-dir", Title: "Create the hub data directory owned by longarm-hub", Idempotent: true,
@@ -281,32 +254,7 @@ echo "apt index updated"`
 		},
 	})
 
-	body, delim := hubhost.Heredoc(content)
-	sum := hubhost.SHA256(content)
-	writeScript := `set -eu
-cfg="$1"
-if [ -f "$cfg" ]; then cp -p "$cfg" "$cfg.bak-$(date +%Y%m%d%H%M%S)"; echo "backed up the previous $cfg"; fi
-umask 027
-cat > "$cfg.lazylongarm.tmp" <<'` + delim + `'
-` + body + delim + `
-chown root:longarm-hub "$cfg.lazylongarm.tmp"
-chmod 0640 "$cfg.lazylongarm.tmp"
-mv -f "$cfg.lazylongarm.tmp" "$cfg"
-echo "wrote $cfg"`
-	p.Steps = append(p.Steps, plan.Step{
-		ID: "hub-config", Title: "Write " + hubhost.ConfigPath, Idempotent: true,
-		Actions: []plan.Action{{Where: host, Privileged: true, Display: "write " + hubhost.ConfigPath + " (root:longarm-hub 0640, previous file backed up):\n" + indent(content, "  ")}},
-		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
-			r := run(`[ "$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)" = "$2" ]`, hubhost.ConfigPath, sum)
-			r.Sudo, r.Timeout = true, 30*time.Second
-			_, err := env.RunQuiet(ctx, r)
-			return checkResult(err)
-		},
-		Apply: func(ctx context.Context, env *plan.Env) error {
-			_, err := env.RunPrivileged(ctx, run(writeScript, hubhost.ConfigPath))
-			return err
-		},
-	})
+	p.Steps = append(p.Steps, hubConfigStep(host, settings))
 
 	p.Steps = append(p.Steps, plan.Step{
 		ID: "bootstrap", Title: "Create the hub CA and a one-time admin join code (longarm-hub bootstrap)", Idempotent: true,
@@ -335,20 +283,15 @@ echo "CA ready; admin join code written to $3 (0600)"`, hubhost.Binary, hubhost.
 			return checkResult(err)
 		},
 		Apply: func(ctx context.Context, env *plan.Env) error {
-			_, err := env.RunPrivileged(ctx, run(`systemctl enable --now longarm-hub 2>&1`))
-			return err
-		},
-		Verify: func(ctx context.Context, env *plan.Env) error {
-			r := run(`i=0; while [ $i -lt 30 ]; do out=$(curl -fsS --max-time 2 "http://$1/healthz" 2>/dev/null) && { printf '%s\n' "$out"; exit 0; }; i=$((i+1)); sleep 1; done; systemctl status --no-pager -n 20 longarm-hub >&2 || true; exit 1`, settings.Panel)
-			r.Timeout = 60 * time.Second
-			res, err := env.RunQuiet(ctx, r)
-			if err != nil {
-				return plan.WithFix(fmt.Errorf("longarm-hub did not become healthy: %w", err), "ssh "+host+" sudo journalctl -u longarm-hub -n 50")
+			if _, err := env.RunPrivileged(ctx, run(`systemctl enable --now longarm-hub 2>&1`)); err != nil {
+				return err
 			}
-			env.Logf("  healthz: %s", hubhost.HealthSummary(string(res.Stdout)))
+			env.Set(envHubStarted, "1")
 			return nil
 		},
+		Verify: func(ctx context.Context, env *plan.Env) error { return waitHealthy(ctx, env, host, settings.Panel) },
 	})
+	p.Steps = append(p.Steps, restartHubStep(host, settings.Panel))
 
 	p.Steps = append(p.Steps, plan.Step{
 		ID: "fingerprint", Title: "Read the hub CA fingerprint", Idempotent: true, ReadOnly: true,
@@ -497,25 +440,35 @@ echo "CA ready; admin join code written to $3 (0600)"`, hubhost.Binary, hubhost.
 		},
 	})
 
-	hubID := config.Slug(req.Name)
-	if hubID == "" {
-		hubID = "hub"
-	}
 	saveHub := func(env *plan.Env) error {
 		if deps.Config == nil {
 			return nil
 		}
 		if err := deps.Config.Update(func(c *config.Config) error {
 			h := config.Hub{ID: hubID, Name: req.Name, Mode: req.Mode, Address: address, CAFingerprint: env.Get("ca_fingerprint"), SSHHost: host, Panel: settings.Panel, Version: req.Version}
-			if old, ok := c.Hub(hubID); ok && old.ID == hubID {
+			// Re-read under the lock; keep what other commands recorded
+			// (panel-access mode and its cloud rules).
+			old, hadOld := c.Hub(hubID)
+			hadOld = hadOld && old.ID == hubID
+			if hadOld {
 				h.CreatedAt = old.CreatedAt
 				h.ConfigDir = old.ConfigDir
+				h.PanelAccess = old.PanelAccess
+				h.Cloud = old.Cloud
 				if h.Version == "" {
 					h.Version = old.Version
 				}
 			}
 			if req.Cloud == "azure" && deps.AzureVM != nil {
-				h.Cloud = &config.Cloud{Provider: "azure", Subscription: deps.AzureVM.Subscription, ResourceGroup: deps.AzureVM.ResourceGroup, VM: deps.AzureVM.Name, Rules: ruleNames(settings)}
+				rules := ruleNames(settings)
+				if hadOld && old.Cloud != nil {
+					for _, r := range old.Cloud.Rules {
+						if strings.HasPrefix(r, cloudfw.RulePrefix+"panel-") {
+							rules = append(rules, r)
+						}
+					}
+				}
+				h.Cloud = &config.Cloud{Provider: "azure", Subscription: deps.AzureVM.Subscription, ResourceGroup: deps.AzureVM.ResourceGroup, VM: deps.AzureVM.Name, Rules: rules}
 				if len(deps.AzureVM.NSGs) > 0 {
 					h.Cloud.NSG = deps.AzureVM.NSGs[0]
 				}
@@ -539,6 +492,16 @@ echo "CA ready; admin join code written to $3 (0600)"`, hubhost.Binary, hubhost.
 		p.Steps = append(p.Steps, clientEnrollSteps(req, host, address, deps)...)
 	}
 	return p, nil
+}
+
+func panelSummary(s hubhost.Settings, h *config.Hub) string {
+	switch h.PanelMode() {
+	case config.PanelPublic:
+		return s.Panel + " (loopback) + " + s.PublicURL + " (public HTTPS, kept from `hub panel-access public`)"
+	case config.PanelTailnet:
+		return s.Panel + " (loopback) + " + h.PanelURL() + " (tailscale serve)"
+	}
+	return s.Panel + " (loopback; open with `lazylongarm hub panel`)"
 }
 
 func ruleNames(s hubhost.Settings) []string {
