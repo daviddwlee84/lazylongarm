@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — 2026-11-22
 
 - `user self|invite|ls|remove`: share your hub with other people. `user self`
   creates your Longarm user and switches this machine to an admin
