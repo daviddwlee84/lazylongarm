@@ -21,9 +21,9 @@ func fakeHubLongarm(t *testing.T) (string, string) {
 echo "$*" >> "` + log + `"
 case "$*" in
   "version --json") echo '{"version":"v0.1.42","features":[]}' ;;
-  "whoami --json") echo '{"name":"laptop","role":"admin","user":"laptop","tenancy":false}' ;;
-  "admin user ls --json") echo '{"users":[],"tenancy":false}' ;;
-  "worker ls --json") echo '{"nodes":[{"id":"aaaa1111","name":"worker-1","role":"worker","state":"approved","online":true,"labels":{"os":"linux","gpu":"none"}}]}' ;;
+  "whoami --json") if [ -n "$FAKE_WHOAMI" ]; then printf '%s\n' "$FAKE_WHOAMI"; else echo '{"name":"laptop","role":"admin","user":"laptop","tenancy":false}'; fi ;;
+  "admin user ls --json") if [ -n "$FAKE_USERS" ]; then printf '%s\n' "$FAKE_USERS"; else echo '{"users":[],"tenancy":false}'; fi ;;
+  "worker ls --json") if [ -n "$FAKE_WORKERS" ]; then printf '%s\n' "$FAKE_WORKERS"; else echo '{"nodes":[{"id":"aaaa1111","name":"worker-1","role":"worker","state":"approved","online":true,"labels":{"os":"linux","gpu":"none"}}]}'; fi ;;
   "admin user add"*)
     echo K7Q2PX
     echo "client certificate alice for user alice, code expires 11-22 10:00" >&2 ;;
@@ -141,5 +141,26 @@ func TestWorkerAddOwnerMustBeThisMachinesUser(t *testing.T) {
 	}
 	if strings.Contains(calls(t, log), "join-code") {
 		t.Fatal("minted a code during a dry run")
+	}
+}
+
+// Re-enrolling an owned worker without --owner keeps its owner: it must not
+// become a fleet worker every user may use.
+func TestReenrollKeepsOwner(t *testing.T) {
+	cfg, _ := fakeHubLongarm(t)
+	t.Setenv("FAKE_WHOAMI", `{"name":"laptop-2","role":"admin","user":"alice","tenancy":true}`)
+	t.Setenv("FAKE_USERS", `{"users":[{"name":"alice","device_count":1,"worker_count":1}],"tenancy":true}`)
+	t.Setenv("FAKE_WORKERS", `{"nodes":[{"id":"bbbb2222cccc","name":"box-1","role":"worker","state":"approved","owner":"alice","labels":{"os":"linux","pool":"home"}}]}`)
+	code, out, errOut := runWith(t, cfg, fakeTools(""), "worker", "add", "--local", "--name", "box-1", "--service", "user", "--reenroll", "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, s := range []string{"--owner alice", "owned by alice", "longarm admin revoke box-1", "--labels pool=home"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("plan lacks %q:\n%s", s, out)
+		}
+	}
+	if strings.Contains(out, "every user of the hub may use it") {
+		t.Fatalf("re-enroll made an owned worker a fleet worker:\n%s", out)
 	}
 }

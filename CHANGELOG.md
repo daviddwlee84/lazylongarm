@@ -13,7 +13,8 @@
   approved, no approve step). It refuses when this machine acts as another
   user or the user does not exist.
 - `worker add --reenroll` revokes the hub's node of that name after minting
-  the new code, keeps its labels, and restarts the service so longarmd loads
+  the new code, keeps its labels and its owner (an owned worker never becomes
+  a fleet worker by accident), and restarts the service so longarmd loads
   the new certificate (it previously kept the old identity until a restart).
 - `worker ls` has an OWNER column (`fleet` for workers without one);
   `status` shows the user on hubs that separate users, and `status --doctor`

@@ -80,7 +80,8 @@ joins approved, and only that user can use it. See [Users and sharing](#users-an
 `--reenroll` enrolls a machine that already has a certificate: it revokes the
 hub's node of that name (after the new code exists, so a failed mint changes
 nothing), joins with `--force`, keeps the old node's labels unless you pass
-`--label`, and restarts the service, because longarmd reloads certificates of
+`--label` and its owner unless you pass `--owner` (an owned worker never
+silently becomes a fleet worker), and restarts the service, because longarmd reloads certificates of
 the same node only. The worker gets a new node ID; its port links go, its job
 history stays with the old ID.
 

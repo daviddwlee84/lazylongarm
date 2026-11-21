@@ -154,13 +154,10 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 	}
 	client := &longarm.Client{ConfigDir: req.Hub.ConfigDir}
 	var who longarm.WhoAmI
-	if req.Mint == "" || f.peer || req.Owner != "" {
+	if req.Mint == "" || f.peer || req.Owner != "" || req.Reenroll {
 		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		who, _ = client.WhoAmI(wctx)
 		cancel()
-	}
-	if err := resolveOwnerAndReplace(ctx, client, who, &req); err != nil {
-		return nil, err
 	}
 	if req.Mint == "" {
 		// Admins mint fleet-worker codes and approve them; owned workers
@@ -169,6 +166,9 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 		if who.Role == "admin" {
 			req.Mint = flows.MintAdmin
 		}
+	}
+	if err := resolveOwnerAndReplace(ctx, client, who, &req); err != nil {
+		return nil, err
 	}
 	deps := flows.WorkerDeps{
 		Config:   o.cfg,
@@ -199,45 +199,55 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 	return flows.BuildWorkerAdd(req, facts, deps)
 }
 
-// resolveOwnerAndReplace checks --owner against the hub and, for
-// --reenroll, finds the node the machine replaces (and keeps its labels).
+// resolveOwnerAndReplace finds, for --reenroll, the node the machine
+// replaces (keeping its labels and its owner: re-enrolling an owned worker
+// without --owner must not turn it into a fleet worker every user may use),
+// then checks the owner against the hub.
 func resolveOwnerAndReplace(ctx context.Context, client *longarm.Client, who longarm.WhoAmI, req *flows.WorkerRequest) error {
-	if req.Owner != "" {
-		if who.User != "" && who.User != req.Owner {
-			return fmt.Errorf("this machine's longarm acts as user %q: a worker owned by %q would be invisible to it, and admins are not exempt on owned workers; switch first (`lazylongarm user self %s`)", who.User, req.Owner, req.Owner)
-		}
-		uctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		users, err := client.AdminUsers(uctx)
+	if req.Reenroll && req.Name != "" {
+		wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		list, err := client.Workers(wctx)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("check user %q on the hub: %w", req.Owner, err)
+			return fmt.Errorf("look up worker %s on the hub: %w", req.Name, err)
 		}
-		if _, ok := users.Find(req.Owner); !ok {
-			return fmt.Errorf("the hub has no user %q (owners are users): `lazylongarm user self %s` creates yours", req.Owner, req.Owner)
+		for _, n := range list.Nodes {
+			if n.Name != req.Name || !n.IsWorker() || n.State == "revoked" {
+				continue
+			}
+			if req.Owner != "" && n.Owner == req.Owner {
+				return fmt.Errorf("worker %s is already owned by %s; nothing to move (to enroll it again anyway: `longarm admin revoke %s`, then --reenroll)", req.Name, req.Owner, req.Name)
+			}
+			if req.Owner == "" && n.Owner != "" {
+				if req.Mint == flows.MintOwner && n.Owner != who.User {
+					return fmt.Errorf("worker %s is owned by %s; `longarm worker add` would make it %s's: pass --owner %s with an admin certificate", req.Name, n.Owner, dash(who.User), n.Owner)
+				}
+				if req.Mint == flows.MintAdmin {
+					req.Owner = n.Owner // keep it owned
+				}
+			}
+			node := n
+			req.Replace = &node
+			if len(req.Labels) == 0 {
+				req.Labels = carriedLabels(n.Labels)
+			}
+			break
 		}
 	}
-	if !req.Reenroll || req.Name == "" {
+	if req.Owner == "" {
 		return nil
 	}
-	wctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	list, err := client.Workers(wctx)
+	if who.User != "" && who.User != req.Owner {
+		return fmt.Errorf("this machine's longarm acts as user %q: a worker owned by %q would be invisible to it, and admins are not exempt on owned workers; switch first (`lazylongarm user self %s`)", who.User, req.Owner, req.Owner)
+	}
+	uctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	users, err := client.AdminUsers(uctx)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("look up worker %s on the hub: %w", req.Name, err)
+		return fmt.Errorf("check user %q on the hub: %w", req.Owner, err)
 	}
-	for _, n := range list.Nodes {
-		if n.Name != req.Name || !n.IsWorker() || n.State == "revoked" {
-			continue
-		}
-		if req.Owner != "" && n.Owner == req.Owner {
-			return fmt.Errorf("worker %s is already owned by %s; nothing to move (to enroll it again anyway: `longarm admin revoke %s`, then --reenroll)", req.Name, req.Owner, req.Name)
-		}
-		node := n
-		req.Replace = &node
-		if len(req.Labels) == 0 {
-			req.Labels = carriedLabels(n.Labels)
-		}
-		return nil
+	if _, ok := users.Find(req.Owner); !ok {
+		return fmt.Errorf("the hub has no user %q (owners are users): `lazylongarm user self %s` creates yours", req.Owner, req.Owner)
 	}
 	return nil
 }
