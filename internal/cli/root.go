@@ -174,6 +174,12 @@ operating guide with --skill.`,
 			return o.deps.RunTUI(cmd.Context(), o)
 		},
 	}
+	// Forms follow --color (and NO_COLOR in auto). No subcommand defines its
+	// own persistent pre-run, so this one runs for every command.
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		cmd.SetContext(wizard.WithColor(cmd.Context(), o.colorEnabled(cmd.OutOrStdout())))
+		return nil
+	}
 	root.SetVersionTemplate("lazylongarm {{.Version}}\n")
 	pf := root.PersistentFlags()
 	pf.StringVar(&o.configPath, "config", "", "config file (env LAZYLONGARM_CONFIG; default $XDG_CONFIG_HOME/lazylongarm/config.toml)")

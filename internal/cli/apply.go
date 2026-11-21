@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
+	"github.com/daviddwlee84/lazylongarm/internal/ui/theme"
 	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 	"github.com/spf13/cobra"
 )
@@ -159,52 +159,41 @@ func (o *options) colorEnabled(w io.Writer) bool {
 type textObserver struct {
 	w     io.Writer
 	total int
-	color bool
+	th    theme.Theme
 	start map[int]time.Time
 }
 
 func newTextObserver(w io.Writer, total int, color bool) *textObserver {
-	return &textObserver{w: w, total: total, color: color, start: map[int]time.Time{}}
+	return &textObserver{w: w, total: total, th: theme.New(color, true), start: map[int]time.Time{}}
 }
 
-func (t *textObserver) style(s string, c string) string {
-	if !t.color {
-		return s
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(s)
-}
-func (t *textObserver) bold(s string) string {
-	if !t.color {
-		return s
-	}
-	return lipgloss.NewStyle().Bold(true).Render(s)
-}
+func (t *textObserver) bold(s string) string { return t.th.Bold.Render(s) }
 
 func (t *textObserver) Started(i int, s *plan.Step) {
 	t.start[i] = time.Now()
-	fmt.Fprintf(t.w, "\n%s %s\n", t.style(fmt.Sprintf("[%d/%d]", i+1, t.total), "12"), t.bold(s.Title))
+	fmt.Fprintf(t.w, "\n%s %s\n", t.th.Badge.Render(fmt.Sprintf(" %d/%d ", i+1, t.total)), t.bold(s.Title))
 }
 
-func (t *textObserver) Line(i int, line string) { fmt.Fprintln(t.w, t.style(line, "8")) }
+func (t *textObserver) Line(i int, line string) { fmt.Fprintln(t.w, t.th.Muted.Render(line)) }
 
 func (t *textObserver) Finished(i int, r plan.Result) {
 	d := time.Since(t.start[i]).Round(100 * time.Millisecond)
 	switch r.Status {
 	case plan.Done:
-		fmt.Fprintf(t.w, "  %s %s\n", t.style("✓ done", "10"), t.style(d.String(), "8"))
+		fmt.Fprintf(t.w, "  %s %s\n", t.th.OK.Render("✓ done"), t.th.Muted.Render(d.String()))
 	case plan.Skipped:
-		fmt.Fprintf(t.w, "  %s\n", t.style("↷ already in place", "14"))
+		fmt.Fprintf(t.w, "  %s\n", t.th.Info.Render("↷ already in place"))
 	case plan.Verified:
-		fmt.Fprintf(t.w, "  %s %s\n", t.style("✓ verified", "10"), t.style(d.String(), "8"))
+		fmt.Fprintf(t.w, "  %s %s\n", t.th.OK.Render("✓ verified"), t.th.Muted.Render(d.String()))
 	case plan.Unknown:
-		fmt.Fprintf(t.w, "  %s %s\n", t.style("? outcome unknown:", "11"), r.Message)
+		fmt.Fprintf(t.w, "  %s %s\n", t.th.Warn.Render("? outcome unknown:"), r.Message)
 	case plan.NeedsAuth, plan.NeedsSudo:
-		fmt.Fprintf(t.w, "  %s %s\n", t.style("! needs you:", "11"), r.Message)
+		fmt.Fprintf(t.w, "  %s %s\n", t.th.Warn.Render("! needs you:"), r.Message)
 	default:
-		fmt.Fprintf(t.w, "  %s %s\n", t.style("✗ failed:", "9"), r.Message)
+		fmt.Fprintf(t.w, "  %s %s\n", t.th.Err.Render("✗ failed:"), r.Message)
 	}
 	if r.Fix != "" {
-		fmt.Fprintf(t.w, "    fix: %s\n", r.Fix)
+		fmt.Fprintf(t.w, "    %s %s\n", t.th.Muted.Render("fix:"), r.Fix)
 	}
 }
 
@@ -220,7 +209,7 @@ func (t *textObserver) summary(results []plan.Result) {
 			verified++
 		}
 	}
-	fmt.Fprintf(t.w, "\n%s %d applied, %d already in place, %d verified\n", t.style("✓ all steps finished:", "10"), done, skipped, verified)
+	fmt.Fprintf(t.w, "\n%s %d applied, %d already in place, %d verified\n", t.th.OK.Render("✓ all steps finished:"), done, skipped, verified)
 }
 
 // printPlan renders a dry run.

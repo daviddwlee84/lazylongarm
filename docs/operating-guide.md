@@ -126,13 +126,28 @@ run.
 
 | Tab | Shows | Actions |
 |---|---|---|
-| 1 Fleet | hub registry merged with managed targets: state, path (relay/direct), CPU, memory | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
-| 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
+| 1 Fleet | hub registry merged with managed targets: state, CPU, memory; details add path (relay/direct), labels, last seen | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
+| 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail that follows new output until you scroll up | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
 | 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel (tunnel on/off, or the tailnet/public URL) · `U` panel login · `A` panel access |
 
-Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus details ·
-`r` refresh (auto every 5 s; `[tui] refresh_seconds`) · `?` help · `q` quit.
-A failed refresh keeps the last rows and marks them stale in the header.
+Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus the right
+pane (j/k, PgUp/PgDn scroll it) · `y` copy the job log, the details or the open
+panel URL · `r` refresh (auto every 5 s; `[tui] refresh_seconds`) · `M` mouse
+on/off · `?` help · `q` quit. A failed refresh keeps the last rows and marks
+them stale in the header.
+
+The mouse is captured by default: click a tab, a row or a footer hint (hints
+run on release, and only if nothing changed since the press), scroll the pane
+under the pointer with the wheel, and drag over the right pane to copy whole,
+untruncated lines. Copies go to the clipboard through the terminal (OSC 52,
+which also works over SSH where the terminal allows it) and through the local
+clipboard tool (`pbcopy`, `xclip`, …). While the mouse is captured, most
+terminals still select text natively with Shift- or Option-drag; `M` releases
+the mouse for the session and `[tui] mouse = false` makes that the default.
+
+Colors follow `--color auto|always|never` (`NO_COLOR` is honored in auto);
+without color, focus and state stay visible through markers (`▌`, `›`, `●/○`,
+`[x]`, bracketed buttons).
 
 ## Companions
 

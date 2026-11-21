@@ -19,6 +19,7 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/fleet"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
+	"github.com/daviddwlee84/lazylongarm/internal/ui/theme"
 	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 )
 
@@ -31,6 +32,11 @@ type Options struct {
 	Refresh    time.Duration
 	Color      bool
 	OpenURL    func(string) error
+	// Mouse captures the mouse (click, wheel, drag-to-copy); M toggles it.
+	Mouse bool
+	// Clipboard writes the local clipboard; copies also go through the
+	// terminal (OSC 52).
+	Clipboard func(string) error
 }
 
 const (
@@ -48,13 +54,20 @@ type Model struct {
 	client *longarm.Client
 	hub    *config.Hub
 
+	th            theme.Theme
 	width, height int
 	tab           int
 	focusDetail   bool
 	detailScroll  int
+	detailFollow  bool   // keep the job log scrolled to its tail
 	overlay       string // "", "help", "confirm"
 	confirm       *confirmation
+	confirmFocus  int // 0 = the confirm button, 1 = Cancel (default)
+	helpScroll    int
 	pendingG      bool
+	mouse         bool
+	press         *press
+	drag          *drag
 
 	rows       []fleet.Row
 	jobs       []longarm.FleetJob
@@ -75,6 +88,7 @@ type Model struct {
 	logToken     uint64
 	execOut      map[string]string
 	status       string
+	statusKind   string // ok, err, warn, pending, info
 	toolBusy     bool
 	panel        *connection.Tunnel
 	panelPending bool
@@ -89,8 +103,8 @@ type logState struct {
 }
 
 type confirmation struct {
-	title, body string
-	run         func() tea.Cmd
+	title, body, button string
+	run                 func() tea.Cmd
 }
 
 // New builds the model.
@@ -101,7 +115,7 @@ func New(opts Options) *Model {
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
-	m := &Model{opts: opts, width: 100, height: 30, logs: map[string]logState{}, execOut: map[string]string{}}
+	m := &Model{opts: opts, th: theme.New(opts.Color, true), mouse: opts.Mouse, width: 100, height: 30, logs: map[string]logState{}, execOut: map[string]string{}}
 	m.setConfig(opts.Config)
 	return m
 }
@@ -123,7 +137,7 @@ func (m *Model) setConfig(cfg *config.Config) {
 
 // Init starts the first refresh and the ticker.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tick(m.opts.Refresh), m.loadWhoAmI())
+	return tea.Batch(m.refresh(), tick(m.opts.Refresh), m.loadWhoAmI(), tea.RequestBackgroundColor)
 }
 
 type tickMsg time.Time
@@ -283,7 +297,7 @@ func (m *Model) togglePanel() tea.Cmd {
 	if m.panel != nil {
 		_ = m.panel.Close()
 		m.panel = nil
-		m.status = "panel tunnel closed"
+		m.setStatus("info", "panel tunnel closed")
 		return nil
 	}
 	if m.hub == nil || m.panelPending {
@@ -300,7 +314,7 @@ func (m *Model) togglePanel() tea.Cmd {
 		return nil
 	}
 	m.panelPending = true
-	m.status = "opening the panel tunnel…"
+	m.setStatus("pending", "opening the panel tunnel…")
 	host, remote, ctx := m.hub.SSHHost, m.hub.Panel, m.opts.Ctx
 	if remote == "" {
 		remote = "127.0.0.1:7480"
@@ -342,7 +356,7 @@ func (m *Model) runTool(label string, args ...string) tea.Cmd {
 		return nil
 	}
 	m.toolBusy = true
-	m.status = label + "…"
+	m.setStatus("pending", label+"…")
 	task := &terminalTask{ctx: m.opts.Ctx, args: args, run: m.opts.RunCommand}
 	return tea.Exec(task, func(err error) tea.Msg { return toolDoneMsg{label: label, err: err} })
 }
@@ -354,11 +368,11 @@ func (m *Model) runProcess(label string, args ...string) tea.Cmd {
 	}
 	cmd, err := m.client.Command(m.opts.Ctx, args...)
 	if err != nil {
-		m.status = err.Error()
+		m.setStatus("err", err.Error())
 		return nil
 	}
 	m.toolBusy = true
-	m.status = label + "…"
+	m.setStatus("pending", label+"…")
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return toolDoneMsg{label: label, err: err} })
 }
 
@@ -473,19 +487,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case killMsg:
 		if msg.err != nil {
-			m.status = "kill " + short(msg.id) + ": " + shortErr(msg.err) + " — refresh before retrying"
+			m.setStatus("err", "kill "+short(msg.id)+": "+shortErr(msg.err)+" — refresh before retrying")
 		} else {
-			m.status = "killed " + short(msg.id)
+			m.setStatus("ok", "killed "+short(msg.id))
 		}
 		return m, m.refresh()
 	case panelMsg:
 		m.panelPending = false
 		if msg.err != nil {
-			m.status = "panel tunnel: " + shortErr(msg.err)
+			m.setStatus("err", "panel tunnel: "+shortErr(msg.err))
 			return m, nil
 		}
 		m.panel = msg.t
-		m.status = "panel: " + m.PanelURL() + " (log in with a panel account + TOTP; p closes, U creates a login)"
+		m.setStatus("ok", "panel: "+m.PanelURL()+" (log in with a panel account + TOTP; p closes, y copies, U creates a login)")
 		if m.opts.OpenURL != nil {
 			_ = m.opts.OpenURL(m.PanelURL())
 		}
@@ -493,18 +507,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panelClosedMsg:
 		if m.panel == msg.t {
 			m.panel = nil
-			m.status = "panel tunnel ended"
+			m.setStatus("info", "panel tunnel ended")
 		}
 		return m, nil
 	case toolDoneMsg:
 		m.toolBusy = false
 		switch {
 		case msg.err == nil:
-			m.status = msg.label + ": done"
+			m.setStatus("ok", msg.label+": done")
 		case errors.Is(msg.err, wizard.ErrCanceled), errors.Is(msg.err, context.Canceled):
-			m.status = msg.label + ": canceled"
+			m.setStatus("info", msg.label+": canceled")
 		default:
-			m.status = msg.label + ": " + shortErr(msg.err)
+			m.setStatus("err", msg.label+": "+shortErr(msg.err))
 		}
 		if m.opts.ReloadCfg != nil {
 			if cfg, err := m.opts.ReloadCfg(); err == nil {
@@ -518,11 +532,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadHub())
 		}
 		return m, tea.Batch(cmds...)
+	case tea.BackgroundColorMsg:
+		m.th = theme.New(m.opts.Color, msg.IsDark())
+		return m, nil
+	case copiedMsg:
+		if msg.err != nil {
+			m.setStatus("ok", "copied "+msg.what+" (through the terminal; local clipboard: "+shortErr(msg.err)+")")
+		} else {
+			m.setStatus("ok", "copied "+msg.what+" to the clipboard")
+		}
+		return m, nil
+	case tea.MouseMsg:
+		return m.mouseMsg(msg)
 	case tea.KeyPressMsg:
 		return m.key(msg)
 	}
 	return m, nil
 }
+
+func (m *Model) setStatus(kind, msg string) { m.status, m.statusKind = msg, kind }
 
 func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.String()
@@ -530,29 +558,46 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	m.press = nil
+	if m.drag != nil && m.drag.done {
+		m.drag = nil
+	}
 	switch m.overlay {
 	case "help":
-		if k == "esc" || k == "?" || k == "q" || k == "enter" {
+		l := m.layout()
+		switch k {
+		case "esc", "?", "q", "enter":
 			m.overlay = ""
+		case "down", "j":
+			m.scrollHelp(l, 1)
+		case "up", "k":
+			m.scrollHelp(l, -1)
+		case "pgdown", "space":
+			m.scrollHelp(l, max(1, l.modal.H-3))
+		case "pgup":
+			m.scrollHelp(l, -max(1, l.modal.H-3))
 		}
 		return m, nil
 	case "confirm":
 		switch k {
 		case "y", "Y":
-			c := m.confirm
-			m.overlay, m.confirm = "", nil
-			if c != nil {
-				return m, c.run()
-			}
+			return m, m.confirmChoose(0)
 		case "n", "N", "esc", "q":
-			m.overlay, m.confirm = "", nil
-			m.status = "canceled"
+			return m, m.confirmChoose(1)
+		case "left", "right", "h", "l", "tab", "shift+tab":
+			m.confirmFocus = 1 - m.confirmFocus
+		case "enter":
+			return m, m.confirmChoose(m.confirmFocus)
 		}
 		return m, nil
 	}
 	if m.pendingG {
 		m.pendingG = false
 		if k == "g" {
+			if m.focusDetail || m.tab == tabHub {
+				m.scrollDetail(m.layout(), -1<<30)
+				return m, nil
+			}
 			m.moveTo(0)
 			return m, m.afterMove()
 		}
@@ -562,7 +607,25 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "?":
-		m.overlay = "help"
+		m.overlay, m.helpScroll = "help", 0
+		return m, nil
+	case "M":
+		m.mouse = !m.mouse
+		if m.mouse {
+			m.setStatus("info", "mouse on: click tabs, rows and hints; wheel scrolls; drag over the right pane copies lines · M turns it off")
+		} else {
+			m.setStatus("info", "mouse off: the terminal's own text selection works again · M turns it back on")
+		}
+		return m, nil
+	case "y":
+		return m, m.yank()
+	case "pgdown", "pgup":
+		l := m.layout()
+		page := max(1, l.detail.Inner().H-l.dPin-1)
+		if k == "pgup" {
+			page = -page
+		}
+		m.scrollDetail(l, page)
 		return m, nil
 	case "1", "2", "3":
 		return m, m.switchTab(int(k[0] - '1'))
@@ -577,24 +640,25 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.focusDetail = !m.focusDetail
 		return m, nil
-	case "up", "k":
-		if m.focusDetail {
-			m.detailScroll = max(0, m.detailScroll-1)
+	case "up", "k", "down", "j":
+		delta := 1
+		if k == "up" || k == "k" {
+			delta = -1
+		}
+		if m.focusDetail || m.tab == tabHub {
+			m.scrollDetail(m.layout(), delta)
 			return m, nil
 		}
-		m.move(-1)
-		return m, m.afterMove()
-	case "down", "j":
-		if m.focusDetail {
-			m.detailScroll++
-			return m, nil
-		}
-		m.move(1)
+		m.move(delta)
 		return m, m.afterMove()
 	case "g":
 		m.pendingG = true
 		return m, nil
 	case "G", "end":
+		if m.focusDetail || m.tab == tabHub {
+			m.scrollDetail(m.layout(), 1<<30)
+			return m, nil
+		}
 		m.moveTo(1 << 30)
 		return m, m.afterMove()
 	case "home":
@@ -610,7 +674,7 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if j, ok := m.selectedJob(); ok && m.tab == tabJobs {
 			cmds = append(cmds, m.fetchLog(j))
 		}
-		m.status = "refreshing"
+		m.setStatus("pending", "refreshing")
 		return m, tea.Batch(cmds...)
 	}
 	for _, a := range m.actions() {
@@ -624,7 +688,7 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) switchTab(t int) tea.Cmd {
 	m.tab = t
 	m.focusDetail = false
-	m.detailScroll = 0
+	m.detailScroll, m.detailFollow, m.drag = 0, t == tabJobs, nil
 	m.clampSelection()
 	switch t {
 	case tabHub:
@@ -638,7 +702,7 @@ func (m *Model) switchTab(t int) tea.Cmd {
 }
 
 func (m *Model) afterMove() tea.Cmd {
-	m.detailScroll = 0
+	m.detailScroll, m.detailFollow, m.drag = 0, m.tab == tabJobs, nil
 	if m.tab == tabJobs {
 		return m.scheduleLog()
 	}
@@ -783,11 +847,12 @@ func (m *Model) actions() []action {
 				return m.runProcess("longarm logs -f", "logs", j.Worker, j.Job.Spec.ID, "-f", "--from", "-65536")
 			}},
 			action{"kill", "kill", []string{"K"}, ok && j.Job.Active(), func() tea.Cmd {
-				m.overlay = "confirm"
+				m.overlay, m.confirmFocus = "confirm", 1
 				m.confirm = &confirmation{
-					title: "Kill job " + short(j.Job.Spec.ID),
-					body:  fmt.Sprintf("Kill %s on %s?\n\nThe job's process tree is terminated and the job ends as killed (exit 137).\nOnly this generation (created %s) is affected.", jobLabel(j.Job), j.Worker, j.Job.CreatedAt),
-					run:   func() tea.Cmd { m.status = "killing " + short(j.Job.Spec.ID); return m.kill(j) },
+					title:  "Kill job " + short(j.Job.Spec.ID),
+					body:   fmt.Sprintf("Kill %s on %s?\n\nThe job's process tree is terminated and the job ends as killed (exit 137). Only this generation (created %s) is affected.", jobLabel(j.Job), j.Worker, createdAt(j.Job.CreatedAt)),
+					button: "Kill",
+					run:    func() tea.Cmd { m.setStatus("pending", "killing "+short(j.Job.Spec.ID)); return m.kill(j) },
 				}
 				return nil
 			}},
@@ -806,6 +871,24 @@ func (m *Model) actions() []action {
 		)
 	}
 	return out
+}
+
+// confirmChoose answers the open confirmation: 0 runs it, 1 cancels.
+func (m *Model) confirmChoose(i int) tea.Cmd {
+	c := m.confirm
+	m.overlay, m.confirm = "", nil
+	if i == 0 && c != nil {
+		return c.run()
+	}
+	m.setStatus("info", "canceled")
+	return nil
+}
+
+func createdAt(s string) string {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.Local().Format("Jan 2 15:04:05")
+	}
+	return s
 }
 
 func jobLabel(j longarm.Job) string {

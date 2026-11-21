@@ -1,5 +1,11 @@
 // Package wizard provides terminal forms shared by CLI commands and dashboard
 // handoffs. Forms collect drafts; callers own domain validation and execution.
+//
+// A form is one column of fields. Unfocused fields collapse to "label value";
+// the focused one expands behind an accent bar with its help text and its
+// editor (an input, or a list of choices with a › cursor and ●/○ marks).
+// Focus, the option cursor and the chosen value each have their own marker,
+// so the screen reads without color too.
 package wizard
 
 import (
@@ -7,13 +13,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"unicode"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/daviddwlee84/lazylongarm/internal/ui/theme"
+	"golang.org/x/term"
 )
 
 type Kind uint8
@@ -42,6 +52,26 @@ type Spec struct {
 var ErrCanceled = errors.New("wizard canceled")
 var ErrBack = errors.New("wizard back")
 
+type colorKey struct{}
+
+// WithColor fixes whether forms started with ctx use color (the CLI's
+// --color decision). Without it, forms use color when NO_COLOR is unset and
+// their output is a terminal.
+func WithColor(ctx context.Context, on bool) context.Context {
+	return context.WithValue(ctx, colorKey{}, on)
+}
+
+func colorFrom(ctx context.Context, out io.Writer) bool {
+	if on, ok := ctx.Value(colorKey{}).(bool); ok {
+		return on
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	f, ok := out.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
 func Edit(ctx context.Context, spec Spec, in io.Reader, out io.Writer) (map[string]string, error) {
 	values, err := EditDraft(ctx, spec, in, out)
 	if err != nil {
@@ -56,7 +86,7 @@ func EditDraft(ctx context.Context, spec Spec, in io.Reader, out io.Writer) (map
 	if len(spec.Fields) == 0 {
 		return nil, errors.New("wizard has no fields")
 	}
-	m := newForm(spec)
+	m := newForm(spec, colorFrom(ctx, out))
 	seen := map[string]bool{}
 	for _, f := range m.spec.Fields {
 		if f.Key == "" || seen[f.Key] {
@@ -85,7 +115,7 @@ func EditDraft(ctx context.Context, spec Spec, in io.Reader, out io.Writer) (map
 }
 
 func Choose(ctx context.Context, title string, choices []Choice, in io.Reader, out io.Writer) (string, error) {
-	values, err := Edit(ctx, Spec{Title: title, SubmitLabel: "Select", Fields: []Field{{Key: "choice", Label: "Selection", Kind: Select, Options: choices, Required: true}}}, in, out)
+	values, err := Edit(ctx, Spec{Title: title, SubmitLabel: "Select", Fields: []Field{{Key: "choice", Kind: Select, Options: choices, Required: true}}}, in, out)
 	return values["choice"], err
 }
 
@@ -98,7 +128,7 @@ func ConfirmBack(ctx context.Context, title, body string, in io.Reader, out io.W
 	return confirm(ctx, title, body, true, in, out)
 }
 func confirm(ctx context.Context, title, body string, back bool, in io.Reader, out io.Writer) (bool, error) {
-	m := &review{title: title, body: body, width: 80, height: 24, back: back}
+	m := &review{title: title, body: body, width: 80, height: 24, back: back, th: theme.New(colorFrom(ctx, out), true)}
 	result, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
 	if ctx.Err() != nil {
 		return false, ctx.Err()
@@ -117,14 +147,17 @@ func confirm(ctx context.Context, title, body string, back bool, in io.Reader, o
 // reacquires the terminal. It doesn't enter the alternate screen or parse input
 // outside Bubble Tea's cancellable terminal reader.
 func Pause(ctx context.Context, message string, in io.Reader, out io.Writer) error {
-	_, err := tea.NewProgram(pause{message: message}, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
+	_, err := tea.NewProgram(pause{message: message, th: theme.New(colorFrom(ctx, out), true)}, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return err
 }
 
-type pause struct{ message string }
+type pause struct {
+	message string
+	th      theme.Theme
+}
 
 func (p pause) Init() tea.Cmd { return nil }
 func (p pause) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -136,14 +169,32 @@ func (p pause) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return p, nil
 }
-func (p pause) View() tea.View { return tea.NewView(clean(p.message) + " · Enter / Esc to return") }
+func (p pause) View() tea.View {
+	msg := clean(p.message)
+	switch {
+	case msg == "Finished":
+		msg = p.th.OK.Render("✓ " + msg)
+	case strings.HasPrefix(msg, "Did not") || strings.HasPrefix(msg, "Cannot"):
+		msg = p.th.Err.Render("✗ " + msg)
+	}
+	return tea.NewView(msg + p.th.Muted.Render(" · ") + p.th.KeyHint("Enter", "/") + " " + p.th.KeyHint("Esc", "to return"))
+}
+
+// hit targets: a field index, or one of these.
+const (
+	hitNone   = -2
+	hitSubmit = -1
+	hitBack   = -3
+	hitChoice = 100000 // + index into the visible (filtered) choices
+)
 
 type hit struct{ x, y, width, index int }
 type form struct {
 	spec          Spec
+	th            theme.Theme
 	inputs        []textinput.Model
 	areas         []textarea.Model
-	index         int
+	index         int // a field, or len(Fields) for the submit button
 	width, height int
 	err           string
 	submitted     bool
@@ -153,12 +204,14 @@ type form struct {
 	pressed       int
 }
 
-func newForm(spec Spec) *form {
+func newForm(spec Spec, color bool) *form {
 	// Own the draft, including slices, so cancellation cannot mutate a caller.
 	spec.Fields = append([]Field(nil), spec.Fields...)
-	m := &form{spec: spec, width: 80, height: 24, pressed: -2}
+	m := &form{spec: spec, width: 80, height: 24, pressed: hitNone, th: theme.New(color, true)}
 	m.search = textinput.New()
-	m.search.Prompt = "Find: "
+	m.search.Prompt = "/ "
+	m.search.Placeholder = "type to filter"
+	m.search.SetStyles(inputStyles(m.th))
 	for i := range m.spec.Fields {
 		f := &m.spec.Fields[i]
 		f.Options = append([]Choice(nil), f.Options...)
@@ -169,14 +222,17 @@ func newForm(spec Spec) *form {
 			f.Value = f.Options[0].Value
 		}
 		input := textinput.New()
-		input.Prompt = "> "
+		input.Prompt = "› "
 		input.CharLimit = 65536
 		input.SetValue(f.Value)
+		input.SetStyles(inputStyles(m.th))
 		if f.Kind == Secret {
 			input.EchoMode = textinput.EchoPassword
 			input.EchoCharacter = '•'
 		}
 		area := textarea.New()
+		area.Prompt = ""
+		area.ShowLineNumbers = false
 		area.SetValue(f.Value)
 		area.CharLimit = 1 << 20
 		area.SetHeight(6)
@@ -184,6 +240,14 @@ func newForm(spec Spec) *form {
 		m.areas = append(m.areas, area)
 	}
 	return m
+}
+
+func inputStyles(th theme.Theme) textinput.Styles {
+	s := textinput.DefaultStyles(true)
+	plain := lipgloss.NewStyle()
+	s.Focused = textinput.StyleState{Text: plain, Placeholder: th.Muted, Suggestion: th.Muted, Prompt: th.Accent}
+	s.Blurred = textinput.StyleState{Text: plain, Placeholder: th.Muted, Suggestion: th.Muted, Prompt: th.Muted}
+	return s
 }
 
 func (m *form) Init() tea.Cmd { return m.focus(0) }
@@ -219,9 +283,7 @@ func (m *form) focus(index int) tea.Cmd {
 	if m.index == len(m.spec.Fields) {
 		return nil
 	}
-	m.inputs[m.index].SetWidth(max(1, m.width-6))
-	m.areas[m.index].SetWidth(max(1, m.width-4))
-	m.areas[m.index].SetHeight(max(1, min(7, m.height-10)))
+	m.resize()
 	if m.spec.Fields[m.index].Kind == Multiline {
 		return m.areas[m.index].Focus()
 	}
@@ -229,6 +291,14 @@ func (m *form) focus(index int) tea.Cmd {
 		return m.inputs[m.index].Focus()
 	}
 	return nil
+}
+func (m *form) resize() {
+	for i := range m.inputs {
+		m.inputs[i].SetWidth(max(1, m.width-8))
+		m.areas[i].SetWidth(max(1, m.width-6))
+		m.areas[i].SetHeight(max(1, min(7, m.height-12)))
+	}
+	m.search.SetWidth(max(1, m.width-10))
 }
 func (m *form) submit() tea.Cmd {
 	m.sync()
@@ -238,7 +308,7 @@ func (m *form) submit() tea.Cmd {
 	}
 	for i, field := range m.spec.Fields {
 		if field.Required && strings.TrimSpace(field.Value) == "" {
-			m.err = clean(field.Label) + " is required"
+			m.err = m.fieldName(i) + " is required"
 			return m.focus(i)
 		}
 		if field.Kind == Select || field.Kind == Toggle {
@@ -247,13 +317,19 @@ func (m *form) submit() tea.Cmd {
 				valid = valid || c.Value == field.Value
 			}
 			if !valid {
-				m.err = "Choose a value for " + clean(field.Label)
+				m.err = "Choose a value for " + m.fieldName(i)
 				return m.focus(i)
 			}
 		}
 	}
 	m.submitted = true
 	return tea.Quit
+}
+func (m *form) fieldName(i int) string {
+	if l := clean(m.spec.Fields[i].Label); l != "" {
+		return l
+	}
+	return "A choice"
 }
 func (m *form) choices() []Choice {
 	if m.index >= len(m.spec.Fields) {
@@ -281,19 +357,34 @@ func (m *form) moveChoice(delta int) {
 		}
 	}
 	f.Value = choices[max(0, min(index+delta, len(choices)-1))].Value
+	m.err = ""
+}
+func (m *form) isChoice() bool {
+	if m.index >= len(m.spec.Fields) {
+		return false
+	}
+	k := m.spec.Fields[m.index].Kind
+	return k == Select || k == Toggle
 }
 
 func (m *form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
-		m.pressed = -2
-		for i := range m.inputs {
-			m.inputs[i].SetWidth(max(1, m.width-6))
-			m.areas[i].SetWidth(max(1, m.width-4))
-			m.areas[i].SetHeight(max(1, min(7, m.height-10)))
-		}
+		m.pressed = hitNone
+		m.resize()
 		return m, nil
+	case tea.MouseWheelMsg:
+		delta := map[tea.MouseButton]int{tea.MouseWheelUp: -1, tea.MouseWheelDown: 1}[msg.Mouse().Button]
+		if delta == 0 {
+			return m, nil
+		}
+		m.pressed = hitNone
+		if m.isChoice() {
+			m.moveChoice(delta)
+			return m, nil
+		}
+		return m, m.focus(max(0, min(m.index+delta, len(m.spec.Fields))))
 	case tea.MouseClickMsg:
 		if msg.Mouse().Button == tea.MouseLeft {
 			m.pressed = m.hit(msg.Mouse().X, msg.Mouse().Y)
@@ -302,27 +393,27 @@ func (m *form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		i := m.hit(msg.Mouse().X, msg.Mouse().Y)
 		pressed := m.pressed
-		m.pressed = -2
-		if i != pressed || i == -2 || msg.Mouse().Button != tea.MouseLeft {
+		m.pressed = hitNone
+		if i != pressed || i == hitNone {
 			return m, nil
 		}
-		if i == -1 {
+		switch {
+		case i == hitSubmit:
 			return m, m.submit()
-		}
-		if i == -3 {
+		case i == hitBack:
 			m.back = m.spec.Back
 			return m, tea.Quit
-		}
-		if i >= 100000 {
+		case i >= hitChoice:
 			choices := m.choices()
-			if index := i - 100000; index < len(choices) {
+			if index := i - hitChoice; index < len(choices) {
 				m.spec.Fields[m.index].Value = choices[index].Value
+				m.err = ""
 			}
 			return m, nil
 		}
 		return m, m.focus(i)
 	case tea.KeyPressMsg:
-		m.pressed = -2
+		m.pressed = hitNone
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -342,9 +433,12 @@ func (m *form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			return m, m.focus((m.index + len(m.spec.Fields)) % (len(m.spec.Fields) + 1))
 		}
-		if m.index == len(m.spec.Fields) {
-			if msg.String() == "enter" {
+		if m.index == len(m.spec.Fields) { // the submit button
+			switch msg.String() {
+			case "enter", "space":
 				return m, m.submit()
+			case "up", "k", "shift+tab":
+				return m, m.focus(m.index - 1)
 			}
 			return m, nil
 		}
@@ -386,8 +480,13 @@ func (m *form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		} else if msg.String() == "enter" && f.Kind != Multiline {
-			return m, m.focus(m.index + 1)
+		} else if f.Kind != Multiline {
+			switch msg.String() {
+			case "enter", "down":
+				return m, m.focus(m.index + 1)
+			case "up":
+				return m, m.focus(m.index - 1)
+			}
 		}
 	}
 	var cmd tea.Cmd
@@ -413,98 +512,235 @@ func (m *form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *form) layout() ([]string, []hit) {
-	lines := []string{clean(m.spec.Title), clean(m.spec.Description), ""}
-	var hits []hit
-	count := max(1, min(len(m.spec.Fields), m.height/3))
-	start := max(0, min(m.index-count/2, len(m.spec.Fields)-count))
-	for i := start; i < start+count; i++ {
-		f := m.spec.Fields[i]
-		value := f.Value
-		if i == m.index && (f.Kind == Text || f.Kind == Secret) {
-			value = m.inputs[i].Value()
+// row is one rendered line and, optionally, what clicking it does.
+type row struct {
+	text string
+	hit  int // hitNone when inert
+}
+
+// fieldRows renders field i: one summary line, or the expanded focused block.
+func (m *form) fieldRows(i, labelW, maxChoices int) []row {
+	t := m.th
+	f := m.spec.Fields[i]
+	label := clean(f.Label)
+	req := ""
+	if f.Required {
+		req = t.Muted.Render(" *")
+	}
+	if i != m.index {
+		gap := labelW + 3 - ansi.StringWidth(label) - ansi.StringWidth(ansi.Strip(req))
+		return []row{{text: "  " + t.Text.Render(label) + req + strings.Repeat(" ", max(1, gap)) + m.summary(i), hit: i}}
+	}
+	bar := t.Accent.Render("┃") + " "
+	var rows []row
+	if label != "" {
+		rows = append(rows, row{text: bar + t.Accent.Render(label) + req, hit: hitNone})
+	}
+	if h := clean(f.Help); h != "" {
+		for _, l := range strings.Split(ansi.Wordwrap(h, max(10, m.width-4), " "), "\n") {
+			rows = append(rows, row{text: bar + t.Muted.Render(l), hit: hitNone})
 		}
-		if f.Kind == Secret && value != "" {
+	}
+	switch f.Kind {
+	case Text, Secret:
+		rows = append(rows, row{text: bar + m.inputs[i].View(), hit: hitNone})
+	case Multiline:
+		for _, l := range strings.Split(m.areas[i].View(), "\n") {
+			rows = append(rows, row{text: bar + l, hit: hitNone})
+		}
+	case Select, Toggle:
+		if m.searching {
+			rows = append(rows, row{text: bar + m.search.View(), hit: hitNone})
+		}
+		choices := m.choices()
+		selected := 0
+		for k, c := range choices {
+			if c.Value == f.Value {
+				selected = k
+			}
+		}
+		n := min(len(choices), max(1, maxChoices))
+		first := max(0, min(selected-n/2, len(choices)-n))
+		if first > 0 {
+			rows = append(rows, row{text: bar + t.Muted.Render(fmt.Sprintf("  ↑ %d more", first)), hit: hitNone})
+		}
+		for k := first; k < first+n; k++ {
+			c := choices[k]
+			cursor, mark, st := "  ", t.Muted.Render("○"), t.Text
+			if c.Value == f.Value {
+				cursor, mark, st = t.Accent.Render("›")+" ", t.Accent.Render("●"), t.Bold
+			}
+			name, more, cut := strings.Cut(clean(c.Label), " — ")
+			text := st.Render(name)
+			if cut {
+				text += t.Muted.Render(" — " + more)
+			}
+			rows = append(rows, row{text: bar + cursor + mark + " " + text, hit: hitChoice + k})
+		}
+		if rest := len(choices) - first - n; rest > 0 {
+			rows = append(rows, row{text: bar + t.Muted.Render(fmt.Sprintf("  ↓ %d more · / to search", rest)), hit: hitNone})
+		}
+		if len(choices) == 0 {
+			rows = append(rows, row{text: bar + t.Warn.Render("No matching choices") + t.Muted.Render(" · Esc clears the search"), hit: hitNone})
+		}
+	}
+	if m.err != "" {
+		rows = append(rows, row{text: bar + t.Err.Render("✗ "+clean(m.err)), hit: hitNone})
+	}
+	return rows
+}
+
+// summary is a collapsed field's value.
+func (m *form) summary(i int) string {
+	t := m.th
+	f := m.spec.Fields[i]
+	value := f.Value
+	switch f.Kind {
+	case Secret:
+		if value != "" {
 			value = "••••••••"
 		}
-		if f.Kind == Multiline {
-			value = "(multiline draft)"
+	case Multiline:
+		if first, _, more := strings.Cut(strings.TrimSpace(value), "\n"); more {
+			value = first + " …"
 		}
+	case Select, Toggle:
 		for _, c := range f.Options {
 			if c.Value == value {
-				value = c.Label
+				name, _, _ := strings.Cut(clean(c.Label), " — ")
+				return t.Bold.Render(name)
 			}
 		}
-		prefix := "  "
-		if i == m.index {
-			prefix = "> "
+	}
+	if strings.TrimSpace(value) == "" {
+		if f.Required {
+			return t.Err.Render("required")
 		}
-		hits = append(hits, hit{0, len(lines), m.width, i})
-		lines = append(lines, prefix+clean(f.Label)+": "+clean(value))
+		return t.Muted.Render("(empty)")
+	}
+	return t.Bold.Render(clean(value))
+}
+
+// layout renders the whole screen and the click targets of its visible lines.
+// View and the mouse handler both call it, so hits match what is drawn.
+func (m *form) layout() ([]string, []hit) {
+	t := m.th
+	var lines []string
+	for _, l := range strings.Split(ansi.Wordwrap(clean(m.spec.Title), max(10, m.width-2), " "), "\n") {
+		lines = append(lines, " "+t.Accent.Render(l))
+	}
+	if d := clean(m.spec.Description); d != "" {
+		for _, l := range strings.Split(ansi.Wordwrap(d, max(10, m.width-2), " "), "\n") {
+			lines = append(lines, " "+t.Muted.Render(l))
+		}
 	}
 	lines = append(lines, "")
-	if m.index < len(m.spec.Fields) {
-		f := m.spec.Fields[m.index]
-		lines = append(lines, clean(f.Help))
-		switch f.Kind {
-		case Text, Secret:
-			lines = append(lines, m.inputs[m.index].View())
-		case Multiline:
-			lines = append(lines, strings.Split(m.areas[m.index].View(), "\n")...)
-		case Select, Toggle:
-			if m.searching {
-				lines = append(lines, m.search.View())
-			}
-			choices := m.choices()
-			selected := 0
-			for i, c := range choices {
-				if c.Value == f.Value {
-					selected = i
-				}
-			}
-			room := max(1, m.height-len(lines)-5)
-			choiceCount := min(len(choices), room)
-			first := max(0, min(selected-choiceCount/2, len(choices)-choiceCount))
-			if len(choices) > choiceCount {
-				lines = append(lines, fmt.Sprintf("  (%d/%d · ↑↓ to scroll, / to search)", selected+1, len(choices)))
-			}
-			for i := first; i < min(len(choices), first+choiceCount); i++ {
-				prefix := "  "
-				if choices[i].Value == f.Value {
-					prefix = "> "
-				}
-				hits = append(hits, hit{0, len(lines), m.width, 100000 + i})
-				lines = append(lines, prefix+clean(choices[i].Label))
-			}
-			if len(choices) == 0 {
-				lines = append(lines, "No matching choices")
-			}
+	var hits []hit
+
+	labelW := 0
+	for _, f := range m.spec.Fields {
+		labelW = max(labelW, ansi.StringWidth(clean(f.Label)))
+	}
+	labelW = min(labelW, max(8, m.width/2))
+	footer := 3 // blank, buttons, keys
+	room := max(1, m.height-len(lines)-footer)
+	if m.height < len(lines)+footer+1 { // tiny terminal: drop the description
+		lines = lines[:1]
+		room = max(1, m.height-1-footer)
+	}
+
+	// Every field's rows; the focused one gets as many choice rows as fit.
+	collapsed := len(m.spec.Fields) - 1
+	var all []row
+	focusTop, focusLen := 0, 0
+	for i := range m.spec.Fields {
+		rows := m.fieldRows(i, labelW, room-collapsed-4)
+		if i == m.index {
+			focusTop, focusLen = len(all), len(rows)
+		}
+		all = append(all, rows...)
+	}
+	start := 0
+	if len(all) > room {
+		start = max(0, min(focusTop-(room-focusLen)/2, len(all)-room))
+		if m.index == len(m.spec.Fields) {
+			start = len(all) - room
 		}
 	}
-	if len(lines) > max(0, m.height-3) {
-		lines = lines[:max(0, m.height-3)]
+	end := min(len(all), start+room)
+	for k := start; k < end; k++ {
+		r := all[k]
+		switch {
+		case k == start && start > 0:
+			r = row{text: t.Muted.Render(fmt.Sprintf("  ↑ %d more above", start+1)), hit: hitNone}
+		case k == end-1 && end < len(all):
+			r = row{text: t.Muted.Render(fmt.Sprintf("  ↓ %d more below", len(all)-end+1)), hit: hitNone}
+		}
+		if r.hit != hitNone {
+			hits = append(hits, hit{0, len(lines), m.width, r.hit})
+		}
+		lines = append(lines, r.text)
 	}
-	for len(lines) < max(0, m.height-3) {
-		lines = append(lines, "")
-	}
-	lines = append(lines, clean(m.err))
+	lines = append(lines, "")
+
 	label := m.spec.SubmitLabel
 	if label == "" {
 		label = "Review"
 	}
-	button := "[Ctrl+S " + clean(label) + "]"
-	hits = append(hits, hit{0, len(lines), ansi.StringWidth(button), -1}, hit{ansi.StringWidth(button) + 2, len(lines), 12, -3})
-	back := "Cancel"
+	submit := clean(label) + " ⌃S"
+	back := "Cancel Esc"
 	if m.spec.Back {
-		back = "Back"
+		back = "Back Esc"
 	}
-	lines = append(lines, button+"  [Esc "+back+"]")
-	lines = append(lines, fmt.Sprintf("Field %d/%d · Tab/Shift+Tab · Select: arrows/j/k, / search", min(m.index+1, len(m.spec.Fields)), len(m.spec.Fields)))
+	x := 1
+	buttons := " " + t.PrimaryText(submit, m.index == len(m.spec.Fields))
+	hits = append(hits, hit{x, len(lines), theme.ButtonWidth(submit), hitSubmit})
+	x += theme.ButtonWidth(submit) + 2
+	buttons += "  " + t.ButtonText(back, false)
+	hits = append(hits, hit{x, len(lines), theme.ButtonWidth(back), hitBack})
+	if n := len(m.spec.Fields); n > 1 {
+		step := fmt.Sprintf("%d / %d", min(m.index+1, n), n)
+		if m.index == n {
+			step = "ready"
+		}
+		if gap := m.width - ansi.StringWidth(buttons) - ansi.StringWidth(step) - 1; gap > 1 {
+			buttons += strings.Repeat(" ", gap) + t.Muted.Render(step)
+		}
+	}
+	lines = append(lines, buttons)
+	for len(lines) < m.height-1 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, " "+m.keyHints())
 	return lines, hits
 }
+
+func (m *form) keyHints() string {
+	t := m.th
+	var hints []string
+	switch {
+	case m.index == len(m.spec.Fields):
+		hints = []string{t.KeyHint("Enter", "submit"), t.KeyHint("↑/Shift+Tab", "back to the fields")}
+	case m.searching:
+		hints = []string{t.KeyHint("type", "to filter"), t.KeyHint("↑↓", "choose"), t.KeyHint("Enter", "keep"), t.KeyHint("Esc", "clear")}
+	case m.isChoice():
+		next := "next"
+		if len(m.spec.Fields) == 1 {
+			next = "select"
+		}
+		hints = []string{t.KeyHint("↑↓", "choose"), t.KeyHint("Enter", next), t.KeyHint("Tab", "field"), t.KeyHint("/", "search")}
+	case m.spec.Fields[m.index].Kind == Multiline:
+		hints = []string{t.KeyHint("Tab", "next field"), t.KeyHint("Ctrl+S", "done")}
+	default:
+		hints = []string{t.KeyHint("Enter/↓", "next"), t.KeyHint("↑", "previous"), t.KeyHint("Tab", "field")}
+	}
+	hints = append(hints, t.Muted.Render("click works too"))
+	return strings.Join(hints, t.Muted.Render(" · "))
+}
+
 func (m *form) hit(x, y int) int {
 	if x < 0 || y < 0 || x >= m.width || y >= m.height {
-		return -2
+		return hitNone
 	}
 	_, hits := m.layout()
 	for i := len(hits) - 1; i >= 0; i-- {
@@ -513,7 +749,7 @@ func (m *form) hit(x, y int) int {
 			return h.index
 		}
 	}
-	return -2
+	return hitNone
 }
 func (m *form) View() tea.View {
 	lines, _ := m.layout()
@@ -522,6 +758,7 @@ func (m *form) View() tea.View {
 
 type review struct {
 	title, body           string
+	th                    theme.Theme
 	width, height, offset int
 	acceptFocus, accepted bool
 	interrupted           bool
@@ -548,14 +785,21 @@ func (m *review) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			m.offset = max(0, m.offset-1)
 		case "down", "j":
-			m.offset++
-		case "pgdown":
-			m.offset += max(1, m.height-5)
+			m.offset = min(m.offset+1, m.maxOffset())
+		case "pgdown", "space":
+			m.offset = min(m.offset+max(1, m.viewH()-1), m.maxOffset())
 		case "pgup":
-			m.offset = max(0, m.offset-max(1, m.height-5))
+			m.offset = max(0, m.offset-max(1, m.viewH()-1))
 		case "enter":
 			m.accepted = m.acceptFocus
 			return m, tea.Quit
+		}
+	case tea.MouseWheelMsg:
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			m.offset = max(0, m.offset-3)
+		case tea.MouseWheelDown:
+			m.offset = min(m.offset+3, m.maxOffset())
 		}
 	case tea.MouseClickMsg:
 		m.pressed = -1
@@ -565,47 +809,108 @@ func (m *review) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		pressed := m.pressed
 		m.pressed = -1
-		if next := m.buttonAt(msg.Mouse().X, msg.Mouse().Y); pressed >= 0 && next == pressed && msg.Mouse().Button == tea.MouseLeft {
+		if next := m.buttonAt(msg.Mouse().X, msg.Mouse().Y); pressed >= 0 && next == pressed {
 			m.accepted = next == 1
 			return m, tea.Quit
 		}
 	}
 	return m, nil
 }
+
+func (m *review) negative() string {
+	if m.back {
+		return "Back"
+	}
+	return "Cancel"
+}
+
+// lines is the wrapped, highlighted body.
+func (m *review) lines() []string {
+	w := max(10, m.width-4)
+	var out []string
+	for _, l := range strings.Split(cleanMultiline(m.body), "\n") {
+		l = strings.ReplaceAll(l, "\t", "    ")
+		indent := len(l) - len(strings.TrimLeft(l, " "))
+		hang := min(indent+4, w/2)
+		first, rest := l, ""
+		if ansi.StringWidth(l) > w {
+			parts := strings.SplitN(ansi.Wrap(l, w, " ,/"), "\n", 2)
+			first, rest = parts[0], strings.TrimLeft(strings.ReplaceAll(parts[1], "\n", ""), " ")
+		}
+		out = append(out, m.highlight(first, false))
+		if rest != "" {
+			for _, part := range strings.Split(ansi.Wrap(rest, w-hang, " ,/"), "\n") {
+				out = append(out, m.highlight(strings.Repeat(" ", hang)+part, true))
+			}
+		}
+	}
+	return out
+}
+
+// highlight colors the shapes plan.Render prints: numbered step titles,
+// [where] tags, # privileged markers and "! " warnings. Other text is plain.
+func (m *review) highlight(l string, continuation bool) string {
+	t := m.th
+	trim := strings.TrimLeft(l, " ")
+	lead := l[:len(l)-len(trim)]
+	if continuation {
+		return t.Muted.Render(l)
+	}
+	if n := strings.Index(trim, ". "); n > 0 && n <= 3 && strings.Trim(trim[:n], "0123456789") == "" {
+		return lead + t.Accent.Render(trim[:n+1]) + " " + t.Bold.Render(trim[n+2:])
+	}
+	if strings.HasPrefix(trim, "! ") {
+		return lead + t.Warn.Render(trim)
+	}
+	marker := ""
+	if strings.HasPrefix(trim, "# ") {
+		marker, trim = t.Warn.Render("#")+" ", trim[2:]
+	}
+	if strings.HasPrefix(trim, "[") {
+		if end := strings.Index(trim, "] "); end > 0 {
+			return lead + marker + t.Info.Render(trim[:end+1]) + " " + trim[end+2:]
+		}
+	}
+	return lead + marker + trim
+}
+
+func (m *review) viewH() int { return max(1, m.height-5) } // title, box borders, buttons, keys
+
+func (m *review) maxOffset() int { return max(0, len(m.lines())-m.viewH()) }
+
+func (m *review) buttonX() (neg, apply int) {
+	return 1, 1 + theme.ButtonWidth(m.negative()) + 2
+}
+
 func (m *review) buttonAt(x, y int) int {
 	if m.height < 4 || x < 0 || x >= m.width || y != m.height-2 {
 		return -1
 	}
-	if x < 10 {
+	neg, apply := m.buttonX()
+	switch {
+	case x >= neg && x < neg+theme.ButtonWidth(m.negative()):
 		return 0
-	}
-	if x >= 12 && x < 21 && m.width >= 21 {
+	case x >= apply && x < apply+theme.ButtonWidth("Apply") && apply+theme.ButtonWidth("Apply") <= m.width:
 		return 1
 	}
 	return -1
 }
+
 func (m *review) View() tea.View {
-	body := strings.Split(cleanMultiline(m.body), "\n")
-	height := max(1, m.height-5)
-	start := max(0, min(m.offset, len(body)-height))
-	lines := []string{clean(m.title), ""}
-	for i := start; i < min(len(body), start+height); i++ {
-		lines = append(lines, body[i])
+	t := m.th
+	body := m.lines()
+	h := m.viewH()
+	start := max(0, min(m.offset, len(body)-h))
+	foot := ""
+	if len(body) > h {
+		foot = fmt.Sprintf("lines %d–%d of %d · ↑↓ PgUp/PgDn scroll", start+1, min(len(body), start+h), len(body))
 	}
-	for len(lines) < max(0, m.height-2) {
-		lines = append(lines, "")
-	}
-	negative := "Cancel"
-	if m.back {
-		negative = "Back"
-	}
-	buttons := ""
-	if m.acceptFocus {
-		buttons = fmt.Sprintf("  %-6s    [ Apply ]", negative)
-	} else {
-		buttons = fmt.Sprintf("[ %-6s ]    Apply", negative)
-	}
-	lines = append(lines, buttons, "Tab/Left/Right choose · Enter confirm · Up/Down scroll · Esc "+strings.ToLower(negative))
+	lines := []string{" " + t.Accent.Render(clean(m.title))}
+	lines = append(lines, t.Box(body[start:], m.width, h+2, theme.BoxOpts{Footer: foot})...)
+	neg := t.ButtonText(m.negative(), !m.acceptFocus)
+	apply := t.PrimaryText("Apply", m.acceptFocus)
+	lines = append(lines, " "+neg+"  "+apply)
+	lines = append(lines, " "+strings.Join([]string{t.KeyHint("Tab/←→", "choose"), t.KeyHint("Enter", "confirm"), t.KeyHint("Esc", strings.ToLower(m.negative()))}, t.Muted.Render(" · ")))
 	return terminalView(lines, m.width, m.height)
 }
 func terminalView(lines []string, width, height int) tea.View {
@@ -619,6 +924,12 @@ func terminalView(lines []string, width, height int) tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+func pad(s string, n int) string {
+	if w := ansi.StringWidth(s); w < n {
+		return s + strings.Repeat(" ", n-w)
+	}
+	return ansi.Truncate(s, n, "…")
 }
 func clean(value string) string {
 	return strings.Map(func(r rune) rune {

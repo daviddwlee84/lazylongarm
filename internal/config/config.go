@@ -159,9 +159,14 @@ type Dotfiles struct {
 
 // TUI preferences.
 type TUI struct {
-	RefreshSeconds int  `toml:"refresh_seconds,omitempty"`
-	Mouse          bool `toml:"mouse,omitempty"`
+	RefreshSeconds int `toml:"refresh_seconds,omitempty"`
+	// Mouse capture in the dashboard; unset = on. false keeps the terminal's
+	// own text selection (the M key toggles it at runtime either way).
+	Mouse *bool `toml:"mouse,omitempty"`
 }
+
+// MouseEnabled is the effective mouse preference (default on).
+func (t TUI) MouseEnabled() bool { return t.Mouse == nil || *t.Mouse }
 
 // Path returns the file this config was loaded from or will be saved to.
 func (c *Config) Path() string { return c.path }
