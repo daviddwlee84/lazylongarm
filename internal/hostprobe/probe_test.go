@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 const linuxOut = `os=Linux
@@ -79,5 +80,31 @@ func TestRootEquivalent(t *testing.T) {
 	f.Groups, f.Sudo = []string{"staff"}, "password"
 	if got := f.RootEquivalent(); len(got) != 0 {
 		t.Fatalf("plain account flagged: %v", got)
+	}
+}
+
+func TestClockSkewWarning(t *testing.T) {
+	f, err := Parse("os=Darwin\narch=x86_64\nclock=1700000000\nprobe_done=yes\n")
+	if err != nil || f.Clock != 1700000000 {
+		t.Fatalf("%v %d", err, f.Clock)
+	}
+	f.Host = "mac-1"
+	for _, tc := range []struct {
+		skew time.Duration
+		want string
+	}{
+		{90 * time.Second, ""},
+		{-2*time.Hour - 51*time.Minute, "2h51m behind"},
+		{10 * time.Minute, "10m ahead of"},
+	} {
+		f.ClockSkew = tc.skew
+		got := f.ClockWarning()
+		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: %q", tc.skew, got)
+		}
+	}
+	f.Clock = 0 // an older probe without the clock line
+	if f.ClockWarning() != "" {
+		t.Fatal("warned without a clock")
 	}
 }

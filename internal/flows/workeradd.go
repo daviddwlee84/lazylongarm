@@ -199,6 +199,9 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 	if f.OS == "darwin" {
 		p.Warnings = append(p.Warnings, "macOS workers run jobs as "+f.User+" (no per-user isolation on macOS)")
 	}
+	if w := f.ClockWarning(); w != "" {
+		p.Warnings = append(p.Warnings, w)
+	}
 	if existing := f.Bins["longarmd"]; existing != "" && existing != longarmdPath {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("another longarmd is installed at %s (%s); the worker will use %s", existing, f.Versions["longarmd"], longarmdPath))
 	}
@@ -212,11 +215,22 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 		[]binary{{"longarmd", longarmdPath}, {"longarm", longarmPath}}, deps))
 
 	// 2. enroll
-	enrolled := func(ctx context.Context, env *plan.Env) (bool, error) {
-		r := run(`test -d "$HOME/.longarm/tls" && grep -qF "$1" "$HOME/.longarm/hub.toml" 2>/dev/null`, strings.Split(hub.Address, ":")[0])
+	// enrollState is "enrolled" (a certificate is there), "requested" (joined
+	// this hub, but not approved yet or longarmd has not collected the
+	// certificate) or "" (not joined to this hub).
+	enrollState := func(ctx context.Context, env *plan.Env) (string, error) {
+		r := run(`grep -qF "$1" "$HOME/.longarm/hub.toml" 2>/dev/null || exit 0
+t="$HOME/.longarm/tls"
+if [ -f "$t/node.crt" ]; then echo enrolled
+elif [ -f "$t/pending.key" ]; then echo requested
+elif [ -d "$t" ]; then echo enrolled
+fi`, strings.Split(hub.Address, ":")[0])
 		r.Timeout = 30 * time.Second
-		_, err := env.RunQuiet(ctx, r)
-		return checkResult(err)
+		res, err := env.RunQuiet(ctx, r)
+		if ok, err := checkResult(err); !ok {
+			return "", err
+		}
+		return strings.TrimSpace(string(res.Stdout)), nil
 	}
 	p.Steps = append(p.Steps, plan.Step{
 		ID: "enroll", Title: "Enroll the worker with the hub (one-time code via stdin)", Idempotent: false,
@@ -225,11 +239,15 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 			if req.Reenroll {
 				return false, nil
 			}
-			ok, err := enrolled(ctx, env)
-			if ok {
+			state, err := enrollState(ctx, env)
+			switch state {
+			case "enrolled":
 				env.Logf("  %s is already enrolled with %s", f.Where(), hub.Address)
+			case "requested":
+				// Joining again would leave a second pending node behind.
+				env.Logf("  %s already asked to join %s; it has no certificate yet (longarmd collects it once the hub approves it and can reach the hub)", f.Where(), hub.Address)
 			}
-			return ok, err
+			return state != "", err
 		},
 		Apply: func(ctx context.Context, env *plan.Env) error {
 			var code secret.Secret
@@ -321,12 +339,14 @@ echo "longarmd started (pid $!)"`, args...))
 			deadline := time.Now().Add(deps.WaitTimeout)
 			last := ""
 			approved := false
+			hubApproved := false
 			for {
 				list, err := deps.Client.Workers(ctx)
 				if err == nil {
 					if n, ok := findNode(list.Nodes, req.Name); ok {
 						state := n.State
 						if n.State == "approved" {
+							hubApproved = true
 							state = map[bool]string{true: "online", false: "offline"}[n.Online]
 						}
 						if state != last {
@@ -352,7 +372,13 @@ echo "longarmd started (pid $!)"`, args...))
 					}
 				}
 				if time.Now().After(deadline) {
-					return plan.WithFix(fmt.Errorf("%s did not come online within %s", req.Name, deps.WaitTimeout), serviceLogHint(host, f))
+					err := fmt.Errorf("%s did not come online within %s%s", req.Name, deps.WaitTimeout, serviceLogs(host, f, req.Service))
+					if hubApproved {
+						if st, _ := enrollState(ctx, env); st == "requested" {
+							err = fmt.Errorf("the hub approved %s, but %s never collected its certificate: longarmd there cannot reach %s (a proxy or firewall in the way, or a clock that is far off)", req.Name, where, hub.Address)
+						}
+					}
+					return plan.WithFix(err, doctorHint(host, longarmdPath))
 				}
 				select {
 				case <-ctx.Done():
@@ -458,15 +484,31 @@ func findNode(nodes []longarm.Node, name string) (longarm.Node, bool) {
 	return longarm.Node{}, false
 }
 
-func serviceLogHint(host string, f *hostprobe.Facts) string {
-	cmd := "journalctl -u longarmd -n 50"
-	if f.OS == "darwin" {
-		cmd = "tail -n 50 ~/.longarm/longarmd.log"
-	}
+// doctorHint runs longarmd's own checklist (enrolled, certificate, running,
+// hub link) on the machine.
+func doctorHint(host, longarmdPath string) string {
 	if host == "" {
-		return cmd
+		return longarmdPath + " doctor"
 	}
-	return "ssh " + host + " " + cmd
+	return "ssh " + host + " " + longarmdPath + " doctor"
+}
+
+// serviceLogs says where longarmd's output goes, as a suffix for an error.
+// A launchd service on macOS keeps no log file.
+func serviceLogs(host string, f *hostprobe.Facts, service string) string {
+	var cmd string
+	switch {
+	case service == ServiceUser:
+		cmd = "tail -n 50 ~/.longarm/longarmd.out"
+	case f.OS == "linux":
+		cmd = "journalctl -u longarmd -n 50"
+	default:
+		return ""
+	}
+	if host != "" {
+		cmd = "ssh " + host + " " + cmd
+	}
+	return " (logs: " + cmd + ")"
 }
 
 func labelArgs(labels []string) string {

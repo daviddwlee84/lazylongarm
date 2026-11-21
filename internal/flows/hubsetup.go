@@ -208,6 +208,9 @@ func BuildHubSetup(req HubRequest, f *hostprobe.Facts, deps HubDeps) (*plan.Plan
 	if req.EnrollLocal {
 		p.Summary = append(p.Summary, [2]string{"this machine", "enroll as the hub's admin client"})
 	}
+	if w := f.ClockWarning(); w != "" {
+		p.Warnings = append(p.Warnings, w)
+	}
 	if f.MemAvailKB > 0 && f.MemAvailKB < 400*1024 {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("only %s free on %s; longarm-hub needs ~100-300 MB", f.MemSummary(), host))
 	}

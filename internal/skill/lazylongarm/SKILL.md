@@ -54,6 +54,10 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   code), passes it over ssh stdin, installs the service and waits until
   `longarm worker ls --json` shows it online. The machine's own `longarm`
   stays signed out.
+- A worker that stays offline: run `ssh <host> ~/.local/bin/longarmd doctor`
+  first. Approved at the hub but no `~/.longarm/tls/node.crt` on the machine
+  means longarmd there cannot reach the hub (proxy/TUN, firewall, or a clock
+  that is far off; the probe warns above two minutes). Do not re-join it.
 - Peer add does the same, then enrolls the machine's `longarm` as client
   `<worker>-client` (client join code over ssh stdin) and runs `longarm ls`
   there. Revoke with `longarm admin revoke <worker>-client`.

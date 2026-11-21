@@ -73,4 +73,5 @@ if has docker; then
   names=$(docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}' 2>/dev/null)
   for n in $names; do kv container "$n"; done
 fi
+kv clock "$(date -u +%s 2>/dev/null)"
 kv probe_done yes

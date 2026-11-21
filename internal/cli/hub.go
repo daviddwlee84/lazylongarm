@@ -169,6 +169,9 @@ func (o *options) probe(cmd *cobra.Command, host string) (*hostprobe.Facts, erro
 	}
 	if !o.json {
 		fmt.Fprintf(cmd.ErrOrStderr(), "  %s · %s · %d CPU · %s · sudo: %s\n", facts.Distro, facts.Platform(), facts.CPUs, facts.MemSummary(), facts.Sudo)
+		if w := facts.ClockWarning(); w != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  ! %s\n", w)
+		}
 	}
 	return facts, nil
 }
