@@ -65,11 +65,39 @@ TOTP login).
 | Run longarmd as `system` | `longarmd service install --user <you>` (systemd unit / macOS LaunchDaemon), survives reboots, sudo once |
 | Run longarmd as `user` | background `longarmd run` as you; no sudo; restart after a reboot |
 | Direct over tailnet | also listen on the tailnet IP (plus an explicit hub relay listener) for direct paths between tailnet peers; default is relay only (outbound connections) |
+| Binaries (`--fetch`) | `auto` (default): the machine downloads them from GitHub, else this machine pushes them · `push`: always copy from this machine · `remote`: the machine downloads them, no fallback |
 
 With an admin certificate, lazylongarm adds **fleet** workers (`longarm admin
 join-code --role worker`, approved right after they join). Without one it
 mints an owner code (`longarm worker add`): the worker is yours, pre-approved
 and usable only by you until you `longarm worker share` it. `--mint` picks one.
+
+### How the binaries get there
+
+The trust anchor is the same in every mode: this machine reads the release's
+`SHA256SUMS` from GitHub (cached in `$XDG_CACHE_HOME/lazylongarm/releases/<tag>/`)
+and every installed binary must hash to its entry. First the step compares the
+sha256 of `~/.local/bin/longarmd` and `longarm` on the machine; matching ones
+are left alone, so a rerun after an interrupted pair installs only the missing
+one.
+
+| `--fetch` | What runs | Bounds |
+|---|---|---|
+| `auto` (default) | the machine runs `curl` (else `wget`) against the release URL into a temporary file, checks the sha256 passed on its command line, then `chmod 0755` + rename. On any failure this machine pushes instead, and the output says why | connect 10 s; abort under 32 KiB/s for 20 s (GNU wget: 20 s read timeout; BusyBox wget: `-T 20`). One failed download switches the rest of the step to push |
+| `push` | this machine downloads and verifies the assets (cached), then streams each over ssh stdin into a temporary file; the machine checks size + sha256 before the rename | fails after 60 s without new bytes arriving; overall deadline 2 min + size at 16 KiB/s (about 45 min for 40 MB) |
+| `remote` | like `auto`, without the fallback: a failed or mismatching download stops the step and installs nothing | connect 30 s; abort under 1 KiB/s for 60 s |
+
+`auto` costs a machine without GitHub access at most a few seconds (DNS or
+connection refused) to about 30 s (dropped packets, then a stuck proxy) once
+per run, before the usual push. A checksum mismatch on the machine's own
+download is reported as such (something on its network path may alter
+downloads) and never installed; `auto` then pushes this machine's verified
+copy. Choose `push` for machines that must not reach GitHub at all, and
+`remote` when this machine's uplink is the slow side. This machine (`--local`)
+always installs from its own verified cache.
+
+The Review, `--dry-run` and `--dry-run --json` list the exact `curl` command,
+URL and destination for each binary.
 
 ## Peer add
 

@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +23,20 @@ type Request struct {
 	Limit   int          // stdout limit in bytes (default 4 MiB)
 	Output  func([]byte) // optional live tee of stdout+stderr chunks
 	Sudo    bool         // run Script as root with `sudo -n` (batch, never prompts)
+	// Stall, when > 0, stops the command after that long without any stdout
+	// or stderr output: an idle timeout for scripts that report progress.
+	// Timeout stays the overall ceiling.
+	Stall time.Duration
+}
+
+// StallError is a command stopped by Request.Stall.
+type StallError struct {
+	Where string
+	Stall time.Duration
+}
+
+func (e *StallError) Error() string {
+	return fmt.Sprintf("%s: no progress for %s", e.Where, e.Stall)
 }
 
 // Result holds bounded output of a finished command.
@@ -63,6 +77,21 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
+	if req.Stall > 0 {
+		var stop context.CancelCauseFunc
+		ctx, stop = context.WithCancelCause(ctx)
+		defer stop(nil)
+		var last atomic.Int64
+		last.Store(time.Now().UnixNano())
+		tee := req.Output
+		req.Output = func(b []byte) {
+			last.Store(time.Now().UnixNano())
+			if tee != nil {
+				tee(b)
+			}
+		}
+		go watchStall(ctx, &last, req.Stall, func() { stop(&StallError{Where: describe(req), Stall: req.Stall}) })
+	}
 	cmd, err := build(ctx, req, false)
 	if err != nil {
 		return Result{}, err
@@ -87,6 +116,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return res, nil
 	}
 	if ctx.Err() != nil {
+		var stall *StallError
+		if errors.As(context.Cause(ctx), &stall) {
+			return res, stall
+		}
 		return res, fmt.Errorf("%s: %w", describe(req), ctx.Err())
 	}
 	diag := stderr.String()
@@ -108,6 +141,25 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return res, ErrSudoPasswordRequired
 	}
 	return res, &CommandError{ExitCode: res.ExitCode, Stderr: tail(Sanitize(diag), 1200)}
+}
+
+// watchStall calls fire once when last (unix nanoseconds) is older than
+// stall, and returns when ctx ends.
+func watchStall(ctx context.Context, last *atomic.Int64, stall time.Duration, fire func()) {
+	every := min(stall/4, time.Second)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if now.Sub(time.Unix(0, last.Load())) > stall {
+				fire()
+				return
+			}
+		}
+	}
 }
 
 // InteractiveCommand returns a command that runs req.Script (as root when
@@ -211,27 +263,3 @@ func tail(s string, n int) string {
 	}
 	return "…" + s[len(s)-n:]
 }
-
-// PushFile copies a local file to dest on host (or locally when host == "")
-// through ssh stdin: written to a temporary sibling, chmod'ed, then renamed.
-// dest may start with "$HOME/"; it is expanded by the remote shell.
-func PushFile(ctx context.Context, host string, data []byte, dest string, mode string) error {
-	if strings.ContainsAny(dest, "\x00\r\n'\"`;|&<>") {
-		return errors.New("invalid destination path")
-	}
-	script := `set -eu
-dest="$1"; mode="$2"
-case "$dest" in "\$HOME/"*) dest="$HOME/${dest#\$HOME/}";; esac
-dir=$(dirname -- "$dest")
-mkdir -p -- "$dir"
-tmp="$dest.lazylongarm.$$"
-umask 077
-cat > "$tmp"
-chmod "$mode" "$tmp"
-mv -f -- "$tmp" "$dest"`
-	_, err := Run(ctx, Request{Host: host, Script: script, Args: []string{dest, mode}, Stdin: data, Timeout: 10 * time.Minute})
-	return err
-}
-
-// discard is an io.Writer used by callers that only want the exit status.
-var _ io.Writer = (*limitedBuffer)(nil)

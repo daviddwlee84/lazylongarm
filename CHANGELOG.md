@@ -8,6 +8,22 @@
   existing worker in place; the review warns that jobs there can then dispatch
   too, louder for root-equivalent accounts. Dashboard Fleet tab: `P`.
 - The host probe reports the account's Unix groups.
+- `worker add|peer add --fetch auto|push|remote` (also in the wizard): the
+  machine can download the Longarm binaries from GitHub itself (curl, else
+  wget), checked against the sha256 this machine read from `SHA256SUMS` before
+  an atomic rename; a mismatch installs nothing. `auto`, the new default, tries
+  that with tight bounds (10 s connect, abort under 32 KiB/s for 20 s) and
+  pushes from this machine on any failure, saying why; `push` is the previous
+  behavior; `remote` has no fallback. The Review / `--dry-run [--json]` shows
+  the exact curl command per binary.
+- Pushing binaries no longer fails on slow links after a fixed 10 minutes: a
+  copy fails after 60 s without progress (the receiving side reports its byte
+  count), with an overall deadline scaled to the file size. Slow copies log
+  their progress. The receiving side checks size and sha256 before the rename,
+  so a copy cut short can never be renamed into place.
+- A rerun after an interrupted binaries step installs only the binary that is
+  missing or different; one already identical is no longer copied again. The
+  check no longer downloads the binaries on this machine, only `SHA256SUMS`.
 - Docs: `worker add` uses an admin join code when you hold an admin
   certificate (the docs said owner code).
 - Fix: overlapping `worker add` runs (or any two commands that record to the

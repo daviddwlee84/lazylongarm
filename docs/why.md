@@ -42,7 +42,7 @@ rarely enough that you never remember the exact steps.
 | Area | Longarm alone | With lazylongarm |
 |---|---|---|
 | Hub install | manual apt, config, bootstrap, systemd, firewall | `hub setup`: one reviewed plan, including Azure NSG rules and enrolling this machine as admin |
-| Adding workers | per-machine downloads, copies, join codes, approval, service | `worker add <ssh-host>`: verified binaries over SSH, code passed on ssh stdin, approval, service, waits until online |
+| Adding workers | per-machine downloads, copies, join codes, approval, service | `worker add <ssh-host>`: verified binaries (downloaded there or pushed over SSH), code passed on ssh stdin, approval, service, waits until online |
 | Seeing what will happen | read the docs, run commands one by one | the Review screen shows every command, file and port (`#` = root) before anything changes; `--dry-run [--json]` prints the same plan |
 | Failures halfway | work out which steps already ran | every step is Check → Apply → Verify with a journal: rerunning skips what is in place and resumes |
 | Secrets | join codes and TOTP secrets pass through your terminal and clipboard | join codes go over ssh stdin and never reach logs, the Review screen or the config; output is redacted |

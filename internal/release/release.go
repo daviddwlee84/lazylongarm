@@ -67,25 +67,11 @@ func AssetName(component, goos, goarch string) string {
 // Fetch returns the local path of a verified asset, downloading it into the
 // cache when needed. A cached file is re-verified before use.
 func Fetch(ctx context.Context, cacheDir, tag, asset string, logf func(string, ...any)) (string, error) {
-	if !tagRE.MatchString(tag) {
-		return "", fmt.Errorf("invalid release tag %q", tag)
-	}
-	if strings.ContainsAny(asset, "/\\") || asset == "" {
-		return "", fmt.Errorf("invalid asset name %q", asset)
-	}
-	dir := filepath.Join(cacheDir, "releases", tag)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	sums, err := checksums(ctx, dir, tag)
+	want, err := Checksum(ctx, cacheDir, tag, asset)
 	if err != nil {
 		return "", err
 	}
-	want, ok := sums[asset]
-	if !ok {
-		return "", fmt.Errorf("%s is not listed in SHA256SUMS of %s", asset, tag)
-	}
-	path := filepath.Join(dir, asset)
+	path := filepath.Join(cacheDir, "releases", tag, asset)
 	if got, err := fileSHA256(path); err == nil && got == want {
 		return path, nil
 	}
@@ -93,7 +79,7 @@ func Fetch(ctx context.Context, cacheDir, tag, asset string, logf func(string, .
 		logf("  downloading %s %s from GitHub", asset, tag)
 	}
 	tmp := path + ".part"
-	if err := download(ctx, fmt.Sprintf("%s/%s/releases/download/%s/%s", downloadBase, Repo, tag, asset), tmp, 200<<20); err != nil {
+	if err := download(ctx, AssetURL(tag, asset), tmp, 200<<20); err != nil {
 		return "", err
 	}
 	got, err := fileSHA256(tmp)
@@ -116,6 +102,37 @@ func Fetch(ctx context.Context, cacheDir, tag, asset string, logf func(string, .
 	return path, nil
 }
 
+// Checksum returns an asset's sha256 from the release's SHA256SUMS
+// (downloaded once into the cache) without downloading the asset itself. A
+// worker that downloads the asset on its own is checked against this value.
+func Checksum(ctx context.Context, cacheDir, tag, asset string) (string, error) {
+	if !tagRE.MatchString(tag) {
+		return "", fmt.Errorf("invalid release tag %q", tag)
+	}
+	if strings.ContainsAny(asset, "/\\") || asset == "" {
+		return "", fmt.Errorf("invalid asset name %q", asset)
+	}
+	dir := filepath.Join(cacheDir, "releases", tag)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	sums, err := checksums(ctx, dir, tag)
+	if err != nil {
+		return "", err
+	}
+	want, ok := sums[asset]
+	if !ok {
+		return "", fmt.Errorf("%s is not listed in SHA256SUMS of %s", asset, tag)
+	}
+	return want, nil
+}
+
+// AssetURL is the GitHub download URL of a release asset (the URL Fetch uses,
+// and the one a worker downloads from with `--fetch remote|auto`).
+func AssetURL(tag, asset string) string {
+	return fmt.Sprintf("%s/%s/releases/download/%s/%s", downloadBase, Repo, tag, asset)
+}
+
 // SHA256 of a cached asset (for comparing with a remote copy).
 func SHA256(path string) (string, error) { return fileSHA256(path) }
 
@@ -123,7 +140,7 @@ func checksums(ctx context.Context, dir, tag string) (map[string]string, error) 
 	path := filepath.Join(dir, "SHA256SUMS")
 	if _, err := os.Stat(path); err != nil {
 		tmp := path + ".part"
-		if err := download(ctx, fmt.Sprintf("%s/%s/releases/download/%s/SHA256SUMS", downloadBase, Repo, tag), tmp, 1<<20); err != nil {
+		if err := download(ctx, AssetURL(tag, "SHA256SUMS"), tmp, 1<<20); err != nil {
 			return nil, err
 		}
 		if err := os.Rename(tmp, path); err != nil {

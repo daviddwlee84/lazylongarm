@@ -52,15 +52,22 @@ func workerAddCommand(o *options) *cobra.Command {
 	return machineAddCommand(o, &workerAddFlags{}, &cobra.Command{
 		Use:   "add [ssh-host]",
 		Short: "Make an SSH-reachable machine (or this one) a Longarm worker (wizard)",
-		Long: `Copy verified longarmd/longarm binaries to the machine's ~/.local/bin, enroll it
-with a one-time join code (passed over ssh stdin), start the service, wait until
-the hub reports it online and run a first command on it. The machine's own
-longarm stays signed out: use ` + "`lazylongarm peer add`" + ` to also let it dispatch.
+		Long: `Install verified longarmd/longarm binaries into the machine's ~/.local/bin,
+enroll it with a one-time join code (passed over ssh stdin), start the service,
+wait until the hub reports it online and run a first command on it. The
+machine's own longarm stays signed out: use ` + "`lazylongarm peer add`" + ` to also let
+it dispatch.
+
+By default (--fetch auto) the machine downloads the binaries from GitHub and
+checks them against the SHA256SUMS this machine fetched; when that fails, this
+machine copies its verified copies over SSH. --fetch push always copies (for
+machines without GitHub access); --fetch remote never does.
 
 Bare in a terminal it opens a wizard; with a host argument (or --local) it builds
 the plan from flags. Rerunning skips steps that are already in place.`,
 		Example: `  lazylongarm worker add
   lazylongarm worker add build-box --label gpu=none
+  lazylongarm worker add build-box --fetch push   # build-box cannot reach GitHub
   lazylongarm worker add --local --service user --yes`,
 	})
 }
@@ -124,6 +131,7 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 		fl.StringVar(&f.clientName, "client-name", "", "client node name (default: <worker name>-client; node names are unique on the hub)")
 		fl.StringVar(&f.clientUser, "client-user", "", "Longarm user the client certificate belongs to (required once the hub separates users)")
 	}
+	fl.StringVar(&f.req.Fetch, "fetch", flows.FetchAuto, "how the binaries reach the machine: auto (it downloads them from GitHub, else push) | push (copy from here over ssh; no GitHub access needed there) | remote (it downloads them, no fallback)")
 	fl.StringVar(&f.req.Mint, "mint", "", "join code source: admin (admin join-code + approve; default for admins) | owner (longarm worker add; needs a Longarm user)")
 	fl.StringVar(&f.hubID, "hub", "", "hub id (default: the default hub)")
 	fl.StringVar(&f.req.Version, "longarm-version", "", "Longarm release tag to install (default: the hub's recorded version, else latest)")
@@ -163,6 +171,9 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 		CacheDir: cacheDir,
 		Fetch: func(ctx context.Context, tag, asset string, logf func(string, ...any)) (string, error) {
 			return release.Fetch(ctx, cacheDir, tag, asset, logf)
+		},
+		Checksum: func(ctx context.Context, tag, asset string) (string, error) {
+			return release.Checksum(ctx, cacheDir, tag, asset)
 		},
 	}
 	if f.peer {
@@ -229,7 +240,7 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 				choices = append(choices, wizard.Choice{Value: h, Label: label})
 			}
 			choices = append(choices, wizard.Choice{Value: "\x00other", Label: "(type another host: alias or user@host)"})
-			values, err := wizard.Edit(ctx, wizard.Spec{Title: "Which machine becomes a " + f.noun() + "?", Description: "lazylongarm copies verified binaries over SSH, enrolls it with a one-time code and starts the service" + map[bool]string{true: "; its longarm is enrolled as a client too", false: ""}[f.peer] + ". Type / to search.", SubmitLabel: "Probe",
+			values, err := wizard.Edit(ctx, wizard.Spec{Title: "Which machine becomes a " + f.noun() + "?", Description: "lazylongarm installs verified binaries, enrolls it with a one-time code and starts the service" + map[bool]string{true: "; its longarm is enrolled as a client too", false: ""}[f.peer] + ". Type / to search.", SubmitLabel: "Probe",
 				Fields: []wizard.Field{{Key: "host", Label: "Machine", Kind: wizard.Select, Options: choices, Required: true}}}, in, out)
 			if err != nil {
 				return err
@@ -273,6 +284,13 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 		if f.peer {
 			fields = append(fields, wizard.Field{Key: "client", Label: "Client name", Value: f.clientName, Help: "its longarm's node name (default: <worker name>-client)"})
 		}
+		if host != "" {
+			fields = append(fields, wizard.Field{Key: "fetch", Label: "Binaries", Kind: wizard.Select, Value: req.Fetch, Options: []wizard.Choice{
+				{Value: flows.FetchAuto, Label: "auto — it downloads them from GitHub (checked here); else copy from this machine"},
+				{Value: flows.FetchPush, Label: "push — copy from this machine over SSH (no GitHub access needed there)"},
+				{Value: flows.FetchRemote, Label: "remote — it downloads them from GitHub; fail if it cannot"},
+			}})
+		}
 		if facts.TailscaleIP != "" {
 			fields = append(fields, wizard.Field{Key: "direct", Label: "Direct over tailnet", Kind: wizard.Toggle, Value: fmt.Sprint(req.DirectTailnet), Options: []wizard.Choice{{Value: "false", Label: "no — reach it through the hub relay (outbound only)"}, {Value: "true", Label: "yes — also listen on " + facts.TailscaleIP + ":7701 for tailnet peers"}}})
 		}
@@ -295,6 +313,9 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			req.Name = strings.TrimSpace(values["name"])
 			req.Labels = splitLabels(values["labels"])
 			req.Service = values["service"]
+			if v := values["fetch"]; v != "" {
+				req.Fetch = v
+			}
 			req.DirectTailnet = values["direct"] == "true"
 			if f.peer {
 				f.clientName = strings.TrimSpace(values["client"])
