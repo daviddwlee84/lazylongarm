@@ -31,8 +31,9 @@ func SourcesContent(distro, codename string) string {
 
 // Status is the part of `tailscale status --json` lazylongarm reads.
 type Status struct {
-	BackendState string `json:"BackendState"` // Running | NeedsLogin | Stopped | ...
-	Self         struct {
+	BackendState   string `json:"BackendState"`   // Running | NeedsLogin | Stopped | ...
+	MagicDNSSuffix string `json:"MagicDNSSuffix"` // "tailnet-1234.ts.net"
+	Self           struct {
 		DNSName      string   `json:"DNSName"` // "hub.tailnet-1234.ts.net."
 		TailscaleIPs []string `json:"TailscaleIPs"`
 	} `json:"Self"`

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `hub panel` and the dashboard's `p` open a tailnet panel URL only when this
+  machine's Tailscale is connected to that tailnet (`tailscale status --json`;
+  on macOS also the app's bundled CLI). Not installed, stopped, logged out or
+  on another tailnet: they say why and open the SSH tunnel instead.
+- Dashboard Hub tab: `T` opens the SSH tunnel even when the panel has a
+  tailnet/public URL (the CLI's `--tunnel`).
+
 ## v0.3.1 — 2026-11-21
 
 - `worker add` no longer reports "already enrolled" for a worker that joined
