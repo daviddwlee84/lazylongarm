@@ -18,7 +18,7 @@ func TestCompanionRemotesPlansOnlyMissing(t *testing.T) {
 		companion.HC: {{Name: "worker-1", Target: "worker-1", Enabled: true}},
 		// herdr not installed
 	}
-	p, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{"worker-1", "worker-1"}, {"worker-2", "me@worker-2.example.com"}}}, RemotesDeps{Lists: lists})
+	p, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{Name: "worker-1", SSHHost: "worker-1"}, {Name: "worker-2", SSHHost: "me@worker-2.example.com"}}}, RemotesDeps{Lists: lists})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestCompanionRemotesPlansOnlyMissing(t *testing.T) {
 			t.Errorf("review lacks %q:\n%s", s, b.String())
 		}
 	}
-	if _, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{"me", ""}}}, RemotesDeps{}); err == nil {
+	if _, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{Name: "me"}}}, RemotesDeps{}); err == nil {
 		t.Fatal("local target accepted")
 	}
 }
@@ -48,7 +48,7 @@ func TestCompanionRemotesApplyRegistersAndVerifies(t *testing.T) {
 			return []byte(`[]`), nil
 		},
 	}
-	p, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{"w", "w"}}, Tools: []string{companion.Herdr}}, RemotesDeps{Tools: tools, Lists: map[string][]companion.Remote{companion.Herdr: nil}})
+	p, err := BuildCompanionRemotes(RemotesRequest{Targets: []RemoteTarget{{Name: "w", SSHHost: "w"}}, Tools: []string{companion.Herdr}}, RemotesDeps{Tools: tools, Lists: map[string][]companion.Remote{companion.Herdr: nil}})
 	if err != nil {
 		t.Fatal(err)
 	}

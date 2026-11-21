@@ -24,6 +24,7 @@ var RemoteTools = []string{HC, Herdr}
 
 // Remote is one machine registered in hc or herdr.
 type Remote struct {
+	ID      string `json:"id,omitempty"`      // herdr profile id (hc: none, it goes by name)
 	Name    string `json:"name"`              // hc name / herdr label
 	Target  string `json:"target"`            // how ssh reaches it
 	State   string `json:"state,omitempty"`   // hc: connected, ...
@@ -105,6 +106,7 @@ func ParseHC(b []byte) ([]Remote, error) {
 // ParseHerdr decodes `herdr machine list --json` ([{label,target,enabled}]).
 func ParseHerdr(b []byte) ([]Remote, error) {
 	var doc []struct {
+		ID      string `json:"id"`
 		Label   string `json:"label"`
 		Target  string `json:"target"`
 		Enabled bool   `json:"enabled"`
@@ -118,7 +120,7 @@ func ParseHerdr(b []byte) ([]Remote, error) {
 		if !m.Enabled {
 			state = "disabled"
 		}
-		out = append(out, Remote{Name: m.Label, Target: m.Target, State: state, Enabled: m.Enabled})
+		out = append(out, Remote{ID: m.ID, Name: m.Label, Target: m.Target, State: state, Enabled: m.Enabled})
 	}
 	return out, nil
 }
@@ -137,6 +139,51 @@ func Find(list []Remote, sshHost, name string) (Remote, bool) {
 		}
 	}
 	return Remote{}, false
+}
+
+// FindLongarm returns the entry that reaches worker through Longarm: the
+// alias longarm-<worker>, or hc's --via 'longarm ssh <worker> --'.
+func FindLongarm(list []Remote, worker string) (Remote, bool) {
+	for _, r := range list {
+		if r.Target == LongarmAlias(worker) || r.viaWorker() == worker {
+			return r, true
+		}
+	}
+	return Remote{}, false
+}
+
+// viaWorker is the worker of a `longarm ssh <worker> ...` command target.
+func (r Remote) viaWorker() string {
+	f := strings.Fields(r.Target)
+	if len(f) >= 3 && filepathBase(f[0]) == "longarm" && f[1] == "ssh" {
+		return f[2]
+	}
+	return ""
+}
+
+func filepathBase(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// ViaLongarm reports whether an entry reaches its machine through Longarm.
+func (r Remote) ViaLongarm() bool {
+	return strings.HasPrefix(r.Target, LongarmHostPrefix) || r.viaWorker() != ""
+}
+
+// RemoveArgv is the command that forgets r in tool (the machine and its
+// terminals are left alone: hc keeps them running, herdr only drops the
+// profile).
+func RemoveArgv(tool string, r Remote) []string {
+	switch tool {
+	case HC:
+		return []string{HC, "machine", "rm", r.Name}
+	case Herdr:
+		return []string{Herdr, "machine", "remove", r.ID}
+	}
+	return nil
 }
 
 // AddArgv is the command that registers sshHost under name in tool.

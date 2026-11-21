@@ -65,6 +65,9 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
 - **Companion tab in the dashboard (P3, M)**: the `companion status` matrix
   (hc / herdr / dotfiles per machine) with the `R`/`D` actions and a bulk
   "register all missing".
+- **Longarm transport in the dashboard (P3, S)**: let the Fleet tab's `R`
+  choose `ssh` or `longarm` (`companion remotes --transport longarm`), and
+  `--all` include hub workers lazylongarm does not manage (`longarm ls --json`).
 - **Dotfiles prompt wizard (P4, M)**: read the `prompt*Once` calls from the
   repository's `.chezmoi.toml.tmpl` and offer them as a form that writes a
   preset; `ask` mode (chezmoi's own prompts) covers this today. It would also

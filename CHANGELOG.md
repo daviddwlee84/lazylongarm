@@ -27,6 +27,23 @@
   user-bound codes for a user's first device only) and explains `longarm login`
   with `/link` instead.
 
+- `companion ssh-config [worker…] | --all`: OpenSSH aliases `longarm-<worker>`
+  that reach a worker's built-in sshd through `longarm proxy` (keyless, over
+  the hub's mTLS channel, no direct route or open port). The output of
+  `longarm ssh-config` is merged into `~/.ssh/lazylongarm/longarm.conf`, and a
+  marked `Include ~/.ssh/lazylongarm/*.conf` block goes at the top of
+  `~/.ssh/config` (backup `~/.ssh/config.lazylongarm.bak`; `--remove` takes it
+  out byte for byte). When chezmoi manages `~/.ssh/config`, or with
+  `--include no`, the file is left alone and the line to add is printed. An
+  Include that already covers the file (also a glob) counts. Settings:
+  `[companions.ssh] file, include`.
+- `companion remotes --transport longarm`: register machines in hc and herdr
+  as `longarm-<worker>` (aliases set up first), so workers you cannot ssh to
+  directly open in hc/herdr too; arguments may be Longarm worker names.
+  Machines registered over their SSH host are left alone unless `--switch`
+  replaces those entries (hc allows one entry per machine). `companion
+  status` marks such entries `(longarm)`, or `+longarm` next to an SSH entry.
+
 ## v0.3.2 — 2026-11-21
 
 - `hub panel` and the dashboard's `p` open a tailnet panel URL only when this
