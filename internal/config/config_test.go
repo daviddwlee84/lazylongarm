@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 func TestRemoveHubDropsTargetsAndDefault(t *testing.T) {
@@ -213,5 +215,189 @@ func TestUpsertKeepsClientName(t *testing.T) {
 	c.UpsertTarget(Target{ID: "w1", Name: "w1", SSHHost: "worker-1", Service: "user"})         // worker add rerun
 	if got := c.Targets[0]; got.ClientName != "w1-client" || got.Service != "user" {
 		t.Fatalf("upsert lost the client: %+v", got)
+	}
+}
+
+// A newer lazylongarm wrote fields this build does not know. Loading works
+// and reports them; writing keeps them.
+const newerConfig = `# written by a newer lazylongarm
+default_hub = "hub"
+future_flag = true
+
+[future_section]
+  level = 3
+
+[[hubs]]
+  id = "hub"
+  mode = "public"
+  address = "hub.example.com:7443"
+  region = "west"
+
+  [hubs.cloud]
+    provider = "azure"
+    zone = "1"
+
+[[targets]]
+  id = "worker-1"
+  hub = "hub"
+  pool_name = "c1"
+
+[[targets]]
+  id = "worker-2"
+  hub = "hub"
+  pool_name = "c2"
+
+[tui]
+  theme = "dark"
+`
+
+func writeConfig(t *testing.T, data string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func rawConfig(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := map[string]any{}
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+	return raw
+}
+
+func entry(raw map[string]any, list string, i int) map[string]any {
+	arr, _ := raw[list].([]any)
+	if i >= len(arr) {
+		return nil
+	}
+	m, _ := arr[i].(map[string]any)
+	return m
+}
+
+func TestUnknownKeysLoadWithWarnings(t *testing.T) {
+	c, err := Load(writeConfig(t, newerConfig), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"future_flag", "future_section", "hubs[hub].cloud.zone", "hubs[hub].region", "targets[worker-1].pool_name", "targets[worker-2].pool_name", "tui.theme"}
+	if got := c.UnknownKeys(); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("unknown keys\n got %q\nwant %q", got, want)
+	}
+	if len(c.Targets) != 2 || c.Hubs[0].Cloud == nil || c.Hubs[0].Cloud.Provider != "azure" {
+		t.Fatalf("known fields not loaded: %+v", c)
+	}
+	// An entry without an id (validation rejects that today) shows its index.
+	if p := (unknownKey{at: []step{{key: "targets", entry: true, index: 2}}, key: "pool_name"}).path(); p != "targets[2].pool_name" {
+		t.Fatal(p)
+	}
+}
+
+func TestUpdateKeepsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, newerConfig)
+	c, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(func(c *Config) error {
+		c.UpsertTarget(Target{ID: "worker-3", Hub: "hub"})
+		c.TUI.RefreshSeconds = 9
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawConfig(t, path)
+	if raw["future_flag"] != true || raw["future_section"].(map[string]any)["level"] != int64(3) {
+		t.Fatalf("top-level keys lost: %v", raw)
+	}
+	hub := entry(raw, "hubs", 0)
+	if hub["region"] != "west" || hub["cloud"].(map[string]any)["zone"] != "1" {
+		t.Fatalf("hub keys lost: %v", hub)
+	}
+	if entry(raw, "targets", 0)["pool_name"] != "c1" || entry(raw, "targets", 1)["pool_name"] != "c2" || entry(raw, "targets", 2)["pool_name"] != nil {
+		t.Fatalf("target keys misplaced: %v", raw["targets"])
+	}
+	if tui := raw["tui"].(map[string]any); tui["theme"] != "dark" || tui["refresh_seconds"] != int64(9) {
+		t.Fatalf("tui: %v", tui)
+	}
+	// The written file still loads, with the same unknown keys, and a
+	// whole-document Save keeps them too.
+	again, err := Load(path, true)
+	if err != nil || len(again.UnknownKeys()) != 7 || len(again.Targets) != 3 {
+		t.Fatalf("%v %q", err, again.UnknownKeys())
+	}
+	if err := again.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if entry(rawConfig(t, path), "targets", 1)["pool_name"] != "c2" {
+		t.Fatal("Save dropped unknown keys")
+	}
+}
+
+func TestDeletingEntryDropsItsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, newerConfig)
+	c, _ := Load(path, true)
+	if err := c.Update(func(c *Config) error {
+		c.Targets = c.Targets[:1] // remove worker-2
+		c.Hubs[0].Cloud = nil     // and the hub's cloud table
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawConfig(t, path)
+	if arr := raw["targets"].([]any); len(arr) != 1 || entry(raw, "targets", 0)["pool_name"] != "c1" {
+		t.Fatalf("targets: %v", raw["targets"])
+	}
+	if hub := entry(raw, "hubs", 0); hub["cloud"] != nil || hub["region"] != "west" {
+		t.Fatalf("hub: %v", hub)
+	}
+	if got := c.UnknownKeys(); len(got) != 5 {
+		t.Fatalf("in-memory config not refreshed: %q", got)
+	}
+	// Removing the hub removes its targets and every key under them.
+	if err := c.Update(func(c *Config) error { c.RemoveHub("hub"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	raw = rawConfig(t, path)
+	if raw["hubs"] != nil || raw["targets"] != nil || raw["future_flag"] != true || raw["tui"].(map[string]any)["theme"] != "dark" {
+		t.Fatalf("after RemoveHub: %v", raw)
+	}
+}
+
+// go-toml matches field names case-insensitively; such a key is known and
+// comes back under its canonical name, not twice.
+func TestCaseVariantKeyIsKnown(t *testing.T) {
+	path := writeConfig(t, "[[targets]]\nID = \"worker-1\"\nName = \"one\"\n")
+	c, err := Load(path, true)
+	if err != nil || len(c.UnknownKeys()) != 0 || c.Targets[0].Name != "one" {
+		t.Fatalf("%v %q %+v", err, c.UnknownKeys(), c.Targets)
+	}
+	if err := c.Update(func(*Config) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if tg := entry(rawConfig(t, path), "targets", 0); tg["name"] != "one" || tg["Name"] != nil {
+		t.Fatalf("%v", tg)
+	}
+}
+
+func TestInvalidConfigStillFails(t *testing.T) {
+	for name, tc := range map[string]struct{ data, want string }{
+		"type mismatch":  {"[[hubs]]\nid = \"hub\"\nmode = 3\naddress = \"hub.example.com:7443\"\n", "line 3"},
+		"nested type":    {"[tui]\nrefresh_seconds = \"fast\"\n", "RefreshSeconds"},
+		"broken toml":    {"[tui\n", "parse"},
+		"validation":     {"[[hubs]]\nid = \"hub\"\nmode = \"sideways\"\naddress = \"x:1\"\nregion = \"west\"\n", "unknown mode"},
+		"dangling hub":   {"[[targets]]\nid = \"worker-1\"\nhub = \"nope\"\npool_name = \"c\"\n", "unknown hub"},
+		"duplicate keys": {"default_hub = \"a\"\ndefault_hub = \"b\"\n", "parse"},
+	} {
+		if _, err := Load(writeConfig(t, tc.data), true); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error containing %q", name, err, tc.want)
+		}
 	}
 }

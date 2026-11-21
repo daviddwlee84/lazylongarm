@@ -16,6 +16,15 @@
   and retry". Each save now re-reads the config under its lock and changes
   only its own target or hub, so a retry of the step also succeeds instead of
   failing again with the same stale copy. `peer add` records the same way.
+- Fix: a config written by a newer lazylongarm (for example a field it added to
+  a `[[targets]]` entry) no longer stops an older build with "strict mode:
+  fields in the document are missing in the target struct". The older build
+  loads it, prints one warning on stderr naming the unknown keys (such as
+  `targets[worker-1].pool_name`) and suggesting `lazylongarm upgrade`, and
+  keeps those keys when it writes the file; removing a hub or target removes
+  its keys with it. `settings show` lists them under `unknown_keys`. Broken
+  TOML, type mismatches (now with the line number) and invalid references
+  still fail.
 
 ## v0.2.0 — 2026-11-21
 

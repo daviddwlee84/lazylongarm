@@ -71,6 +71,39 @@ func TestStatusJSONWithoutHub(t *testing.T) {
 	}
 }
 
+// A config written by a newer lazylongarm: commands still run, stdout stays
+// valid JSON, and one warning on stderr names the keys and the fix.
+func TestUnknownConfigKeysWarnOnStderr(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := "[[targets]]\nid = \"worker-1\"\npool_name = \"c1\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, false, "--config", path, "settings", "show", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	var rep struct {
+		Unknown []string `json:"unknown_keys"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out)
+	}
+	if len(rep.Unknown) != 1 || rep.Unknown[0] != "targets[worker-1].pool_name" {
+		t.Fatalf("unknown_keys %q", rep.Unknown)
+	}
+	if strings.Count(errOut, "! ") != 1 || !strings.Contains(errOut, "targets[worker-1].pool_name") || !strings.Contains(errOut, "lazylongarm upgrade") {
+		t.Fatalf("warning: %q", errOut)
+	}
+	// A type error is still fatal and names the line.
+	if err := os.WriteFile(path, []byte("[[targets]]\nid = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := run(t, false, "--config", path, "settings", "show"); code != 1 || !strings.Contains(errOut, "line 2") {
+		t.Fatalf("type error: %d %s", code, errOut)
+	}
+}
+
 func TestSkillPrints(t *testing.T) {
 	code, out, _ := run(t, false, "--skill")
 	if code != 0 || !strings.Contains(out, "name: lazylongarm") {
