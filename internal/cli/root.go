@@ -14,10 +14,12 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/daviddwlee84/lazylongarm/internal/companion"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
+	"github.com/daviddwlee84/lazylongarm/internal/longarm"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
 	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 	"github.com/spf13/cobra"
@@ -58,6 +60,9 @@ type Dependencies struct {
 	Exec     func(*exec.Cmd) error // runs a command attached to the terminal
 	// Companion finds and queries hc/herdr on this machine.
 	Companion companion.Tools
+	// Longarm runs the longarm CLI with LONGARM_CONFIG_DIR=configDir
+	// ("" = Longarm's default) and returns its stdout.
+	Longarm func(ctx context.Context, configDir string, args ...string) ([]byte, error)
 }
 
 type options struct {
@@ -141,6 +146,11 @@ func New(deps Dependencies) (*cobra.Command, *options) {
 	}
 	if deps.Companion.Run == nil {
 		deps.Companion = companion.System()
+	}
+	if deps.Longarm == nil {
+		deps.Longarm = func(ctx context.Context, configDir string, args ...string) ([]byte, error) {
+			return (&longarm.Client{ConfigDir: configDir}).Run(ctx, 2*time.Minute, nil, args...)
+		}
 	}
 	if deps.RunTUI == nil {
 		deps.RunTUI = runDashboard

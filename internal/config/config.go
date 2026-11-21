@@ -131,6 +131,19 @@ type Target struct {
 // fleet machines. Personal values (repository, bundles) live only here.
 type Companions struct {
 	Dotfiles Dotfiles `toml:"dotfiles,omitempty"`
+	SSH      SSH      `toml:"ssh,omitempty"`
+}
+
+// SSH configures `lazylongarm companion ssh-config` (Longarm ssh aliases,
+// Host longarm-<worker>) and `companion remotes --transport longarm`.
+type SSH struct {
+	// File is the alias file lazylongarm writes; empty =
+	// ~/.ssh/lazylongarm/longarm.conf.
+	File string `toml:"file,omitempty"`
+	// Include is how the file reaches ssh: "auto" (a marked Include block
+	// at the top of ~/.ssh/config unless chezmoi manages it), "yes" (always
+	// that block) or "no" (never edit ~/.ssh/config). Empty = auto.
+	Include string `toml:"include,omitempty"`
 }
 
 // Dotfiles configures `lazylongarm companion dotfiles`.

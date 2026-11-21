@@ -30,6 +30,8 @@ plan.
 | Invite someone (writes a file with a one-time code; never paste it into chat) | `lazylongarm user invite <user> --out <file> --yes --json` (refuses while fleet workers exist) |
 | hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
 | Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
+| Preview registering them through Longarm (keyless, no direct ssh) | `lazylongarm companion remotes <machine\|worker>… --transport longarm [--switch] --dry-run --json` |
+| Preview `ssh longarm-<worker>` aliases | `lazylongarm companion ssh-config <worker>… [--include auto\|yes\|no] --dry-run --json` (`--remove` undoes) |
 | Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--answers defaults\|<preset>] [--update] --dry-run --json` (default `ask` needs the user's terminal) |
 | Effective config and paths | `lazylongarm settings show` |
 

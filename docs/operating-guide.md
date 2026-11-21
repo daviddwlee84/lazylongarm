@@ -231,7 +231,51 @@ and leave work that is already done alone.
 |---|---|
 | `companion status [--no-remote]` | hc / herdr columns from their machine lists here; a dotfiles column from a read-only check over SSH (chezmoi source, origin, revision) |
 | `companion remotes` | for each machine hc or herdr does not list: `hc machine add <ssh-host> --install --name <machine>` (copies hc there when missing or old) and `herdr machine add <ssh-host> --label <machine>` (installs and starts the herdr server there; approve its prompts in the terminal). `--tool hc\|herdr` limits it; a tool not installed here is skipped with a warning |
+| `companion remotes --transport longarm` | registers `longarm-<worker>` instead of the SSH host (see below); arguments may be Longarm worker names. A machine hc or herdr already reaches over its SSH host is left alone unless `--switch` replaces that entry (its terminals keep running; hc allows one entry per machine) |
+| `companion ssh-config` | writes the `longarm-<worker>` OpenSSH aliases (see below); `--remove` undoes it |
 | `companion dotfiles` | bootstraps chezmoi dotfiles in your terminal (`ssh -tt`, so sudo prompts work), then records the bundle and revision on the target. A machine that already has dotfiles is skipped (`--update` runs `chezmoi update --init`); one with dotfiles from another repository is refused, never replaced |
+
+### Reaching workers through Longarm (`longarm-<worker>`)
+
+Every worker runs a built-in sshd that is reachable only through
+`longarm proxy <worker>`, over the hub's mTLS channel: no ssh keys, no
+direct route and no open port (it picks a direct or relayed path like any
+Longarm connection). `longarm ssh-config` prints OpenSSH entries for it;
+`companion ssh-config` puts them where ssh, scp, VS Code Remote-SSH, hc and
+herdr find them:
+
+1. the output of `longarm ssh-config <worker…>` (which also records the
+   workers' host keys, fetched over mTLS, in Longarm's `known_hosts`) is merged
+   into `~/.ssh/lazylongarm/longarm.conf`, a file lazylongarm owns;
+2. a marked block goes at the very top of `~/.ssh/config` (an Include below a
+   `Host` line would only apply to that host), with a backup in
+   `~/.ssh/config.lazylongarm.bak`:
+
+   ```
+   # >>> lazylongarm (longarm ssh aliases) >>>
+   Include ~/.ssh/lazylongarm/*.conf
+   # <<< lazylongarm <<<
+   ```
+
+3. `ssh -G longarm-<worker>` must show `ProxyCommand … proxy <worker>`.
+
+An Include that already covers the file (yours, or a glob such as
+`Include ~/.ssh/conf.d/*.conf` with `[companions.ssh] file` pointing there)
+counts, and nothing is edited. When chezmoi manages `~/.ssh/config`, or with
+`--include no`, lazylongarm does not edit it (chezmoi apply would undo that)
+and prints the line instead: put it at the top of the file's source once;
+OpenSSH skips a glob that matches nothing, so the line is safe on every
+machine. `--include yes` edits the file anyway.
+
+```toml
+[companions.ssh]
+file = "~/.ssh/lazylongarm/longarm.conf"   # default
+include = "auto"                           # auto | yes | no
+```
+
+Shells and commands run as the account longarmd runs as (the SSH user for
+workers `worker add` installed). A worker without a direct path is relayed
+through the hub, which is slower than a direct tailnet ssh.
 
 lazylongarm only calls hc's and herdr's public CLIs; it never edits their state
 files. Your personal values go in the config:

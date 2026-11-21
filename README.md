@@ -143,7 +143,8 @@ back with `longarm admin revoke <worker>-client`.
 | `user invite USER [--out FILE]` | add a user and write an invite with install, join and worker steps; refuses while fleet workers exist |
 | `user ls` / `user remove USER [--purge]` | users with device/worker counts and the fleet workers everyone may use; revoke a user's devices and workers |
 | `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
-| `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer |
+| `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer (`--transport longarm`: as `longarm-<worker>`, keyless through Longarm) |
+| `companion ssh-config [worker…] \| --all` | OpenSSH aliases `longarm-<worker>` through Longarm's mTLS channel, included from `~/.ssh/config` (`--remove` undoes it) |
 | `companion dotfiles [machine…] \| --all` | bootstrap (or `--update`) chezmoi dotfiles on fleet machines |
 | `status [--doctor]` | configured hubs, local client, `longarm doctor` |
 | `skill sync` | Longarm's skill into `~/.agents/skills` + Claude symlinks; lazylongarm stub skill |

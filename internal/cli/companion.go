@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -25,15 +27,18 @@ func companionCommand(o *options) *cobra.Command {
 		Long: `lazylongarm already knows the fleet's machines, so it can set up the tools you
 use next to Longarm without retyping hosts:
 
-  remotes   register the machines in hc and herdr on this computer
-  dotfiles  bootstrap (or update) chezmoi dotfiles on the machines
-  status    show which machines have what
+  remotes     register the machines in hc and herdr on this computer
+              (over their SSH hosts, or keyless through Longarm)
+  ssh-config  OpenSSH aliases longarm-<worker> through Longarm's mTLS channel
+  dotfiles    bootstrap (or update) chezmoi dotfiles on the machines
+  status      show which machines have what
 
 Personal values (your dotfiles repository, bundles, a bootstrap command) live in
-the [companions.dotfiles] table of lazylongarm's config.`,
+the [companions.dotfiles] table of lazylongarm's config; ssh-config settings in
+[companions.ssh].`,
 		Args: cobra.ArbitraryArgs, RunE: groupHelp,
 	}
-	c.AddCommand(companionStatusCommand(o), companionRemotesCommand(o), companionDotfilesCommand(o))
+	c.AddCommand(companionStatusCommand(o), companionRemotesCommand(o), companionSSHConfigCommand(o), companionDotfilesCommand(o))
 	return c
 }
 
@@ -51,6 +56,20 @@ func (o *options) remoteTargets() []config.Target {
 // pickTargets resolves host arguments (target id/name or SSH host), --all,
 // or a multi-select in a terminal. Unknown hosts become ad-hoc targets.
 func (o *options) pickTargets(cmd *cobra.Command, args []string, all bool, title, desc string, preselect func(config.Target) bool) ([]config.Target, error) {
+	return o.pickTargetsAs(cmd, args, all, false, title, desc, preselect)
+}
+
+// targetWorker is the Longarm worker name of a target.
+func targetWorker(t config.Target) string {
+	if t.WorkerName != "" {
+		return t.WorkerName
+	}
+	return t.Name
+}
+
+// pickTargetsAs is pickTargets; with workers, unknown arguments are Longarm
+// worker names (and a target's worker name matches too) instead of SSH hosts.
+func (o *options) pickTargetsAs(cmd *cobra.Command, args []string, all, workers bool, title, desc string, preselect func(config.Target) bool) ([]config.Target, error) {
 	known := o.remoteTargets()
 	if all {
 		if len(args) > 0 {
@@ -68,6 +87,13 @@ func (o *options) pickTargets(cmd *cobra.Command, args []string, all bool, title
 				out = append(out, *t)
 			} else if t, ok := o.cfg.TargetByHost(a); ok && a != "" {
 				out = append(out, *t)
+			} else if t, ok := o.targetByWorker(a); ok && workers {
+				out = append(out, t)
+			} else if workers {
+				if err := companion.ValidWorkerName(a); err != nil {
+					return nil, usage("%v", err)
+				}
+				out = append(out, config.Target{ID: a, Name: a, WorkerName: a})
 			} else {
 				if err := connection.ValidateHost(a); err != nil {
 					return nil, usage("%v", err)
@@ -110,6 +136,16 @@ func (o *options) pickTargets(cmd *cobra.Command, args []string, all bool, title
 		}
 	}
 	return out, nil
+}
+
+// targetByWorker finds the remote target whose Longarm worker is name.
+func (o *options) targetByWorker(name string) (config.Target, bool) {
+	for _, t := range o.remoteTargets() {
+		if targetWorker(t) == name {
+			return t, true
+		}
+	}
+	return config.Target{}, false
 }
 
 // remoteLists reads hc/herdr machine lists; a tool that is not installed is
@@ -181,13 +217,21 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 				rows[i] = companionRow{Name: t.Name, SSHHost: t.SSHHost, Remotes: map[string]string{}}
 				for _, tool := range companion.RemoteTools {
 					list, ok := lists[tool]
-					switch r, found := companion.Find(list, t.SSHHost, t.Name); {
+					r, found := companion.Find(list, t.SSHHost, t.Name)
+					lr, viaLongarm := companion.FindLongarm(list, targetWorker(t))
+					switch {
 					case listErrs[tool] != nil:
 						rows[i].Remotes[tool] = "error"
 					case !ok:
 						rows[i].Remotes[tool] = "not installed"
+					case found && r.ViaLongarm():
+						rows[i].Remotes[tool] = dash(r.State) + " (longarm)"
+					case found && viaLongarm:
+						rows[i].Remotes[tool] = dash(r.State) + " +longarm"
 					case found:
 						rows[i].Remotes[tool] = dash(r.State)
+					case viaLongarm:
+						rows[i].Remotes[tool] = dash(lr.State) + " (longarm)"
 					default:
 						rows[i].Remotes[tool] = "missing"
 					}
@@ -288,8 +332,9 @@ func checkDotfiles(ctx context.Context, t config.Target, repo string) *dotfilesS
 // ---- companion remotes ----
 
 func companionRemotesCommand(o *options) *cobra.Command {
-	var all bool
+	var all, switchEntries bool
 	var tools []string
+	var transport, include, hubID string
 	var ao applyOptions
 	c := &cobra.Command{
 		Use:   "remotes [machine...]",
@@ -299,12 +344,23 @@ func companionRemotesCommand(o *options) *cobra.Command {
 ` + "`herdr machine add <ssh-host> --label <machine>`" + ` (installs and starts the herdr
 server there; it may ask you to approve that in the terminal).
 
-Machines are lazylongarm targets (by name) or SSH hosts. Bare in a terminal it
-offers a picker with the unregistered machines selected. Machines already
-registered are left alone, so reruns are safe.`,
+--transport longarm registers longarm-<worker> instead of the SSH host: ssh
+then reaches the worker's built-in sshd through ` + "`longarm proxy`" + ` (keyless, over
+the hub's mTLS channel, no direct route or open port needed), so machines
+you cannot ssh to directly work too. The aliases come from
+` + "`companion ssh-config`" + ` (planned first when ssh does not resolve them yet).
+A machine already registered over its SSH host is left alone unless
+--switch replaces that entry (its terminals keep running).
+
+Machines are lazylongarm targets (by name) or SSH hosts (with --transport
+longarm: Longarm worker names). Bare in a terminal it offers a picker with the
+unregistered machines selected. Machines already registered are left alone,
+so reruns are safe.`,
 		Example: `  lazylongarm companion remotes
   lazylongarm companion remotes --all --tool hc
-  lazylongarm companion remotes worker-1 --dry-run --json`,
+  lazylongarm companion remotes worker-1 --dry-run --json
+  lazylongarm companion remotes worker-1 --transport longarm
+  lazylongarm companion remotes --all --transport longarm --switch --tool herdr`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := o.load(); err != nil {
 				return err
@@ -312,6 +368,13 @@ registered are left alone, so reruns are safe.`,
 			tools, err := validTools(tools)
 			if err != nil {
 				return err
+			}
+			viaLongarm := transport == flows.TransportLongarm
+			if !viaLongarm && transport != flows.TransportSSH {
+				return usage("unknown --transport %q (use ssh, longarm)", transport)
+			}
+			if !viaLongarm && (switchEntries || include != "") {
+				return usage("--switch and --include go with --transport longarm")
 			}
 			lists, listErrs := o.remoteLists(cmd.Context(), tools)
 			for _, tool := range tools {
@@ -321,51 +384,199 @@ registered are left alone, so reruns are safe.`,
 			}
 			unregistered := func(t config.Target) bool {
 				for _, list := range lists {
-					if _, ok := companion.Find(list, t.SSHHost, t.Name); !ok {
+					if viaLongarm {
+						if _, ok := companion.FindLongarm(list, targetWorker(t)); !ok {
+							return true
+						}
+					} else if _, ok := companion.Find(list, t.SSHHost, t.Name); !ok {
 						return true
 					}
 				}
 				return false
 			}
-			targets, err := o.pickTargets(cmd, args, all, "Register which machines in "+strings.Join(tools, " and ")+"?", "Space toggles, enter confirms. Unregistered machines are preselected.", unregistered)
+			targets, err := o.pickTargetsAs(cmd, args, all, viaLongarm, "Register which machines in "+strings.Join(tools, " and ")+"?", "Space toggles, enter confirms. Unregistered machines are preselected.", unregistered)
 			if err != nil {
 				return err
 			}
-			req := flows.RemotesRequest{Tools: tools}
+			req := flows.RemotesRequest{Tools: tools, Transport: transport, Switch: switchEntries}
 			for _, t := range targets {
-				req.Targets = append(req.Targets, flows.RemoteTarget{Name: t.Name, SSHHost: t.SSHHost})
+				req.Targets = append(req.Targets, flows.RemoteTarget{Name: t.Name, SSHHost: t.SSHHost, Worker: targetWorker(t)})
 			}
-			p, err := flows.BuildCompanionRemotes(req, flows.RemotesDeps{Tools: o.deps.Companion, Lists: lists})
+			deps := flows.RemotesDeps{Tools: o.deps.Companion, Lists: lists}
+			if viaLongarm {
+				sreq, sdeps, err := o.sshConfigSetup(hubID, "", include)
+				if err != nil {
+					return err
+				}
+				for _, t := range req.Targets {
+					sreq.Workers = append(sreq.Workers, t.Worker)
+				}
+				st, err := flows.ReadSSHConfigState(cmd.Context(), sreq, o.deps.Companion)
+				if err != nil {
+					return err
+				}
+				req.SSH, deps.SSH, deps.SSHState = sreq, sdeps, st
+			}
+			p, err := flows.BuildCompanionRemotes(req, deps)
 			if err != nil {
 				return usage("%v", err)
 			}
-			if ao.dryRun {
-				return o.printPlan(cmd, p)
-			}
-			if len(p.Steps) == 0 {
-				if o.json {
-					return writeJSON(cmd.OutOrStdout(), map[string]any{"plan": p.Digest(), "results": []plan.Result{}})
-				}
-				p.Render(cmd.ErrOrStderr())
-				fmt.Fprintln(cmd.OutOrStdout(), "Nothing to register.")
-				return nil
-			}
-			if err := o.review(cmd, p, ao); err != nil {
-				if errors.Is(err, errBack) {
-					return wizard.ErrCanceled
-				}
-				return err
-			}
-			env := plan.NewEnv()
-			results, err := o.apply(cmd, p, env, ao)
-			if o.json {
-				_ = writeJSON(cmd.OutOrStdout(), map[string]any{"plan": p.Digest(), "results": results})
-			}
-			return err
+			return o.runLocalPlan(cmd, p, ao, "Nothing to register.")
 		},
 	}
 	c.Flags().BoolVar(&all, "all", false, "every fleet machine lazylongarm manages")
 	c.Flags().StringSliceVar(&tools, "tool", nil, "only these tools: hc, herdr (default: both)")
+	c.Flags().StringVar(&transport, "transport", flows.TransportSSH, "how hc/herdr reach the machines: ssh (their SSH hosts) or longarm (longarm-<worker> through Longarm)")
+	c.Flags().BoolVar(&switchEntries, "switch", false, "with --transport longarm: replace entries that reach a machine over its SSH host")
+	c.Flags().StringVar(&include, "include", "", "with --transport longarm: how the aliases reach ssh, as in `companion ssh-config` (auto, yes, no)")
+	c.Flags().StringVar(&hubID, "hub", "", "hub whose Longarm client config to use (default: the default hub)")
+	ao.bind(c)
+	return c
+}
+
+// runLocalPlan reviews and applies a plan of local steps (dry-run, JSON and
+// the empty case included).
+func (o *options) runLocalPlan(cmd *cobra.Command, p *plan.Plan, ao applyOptions, nothing string) error {
+	if ao.dryRun {
+		return o.printPlan(cmd, p)
+	}
+	if len(p.Steps) == 0 {
+		if o.json {
+			return writeJSON(cmd.OutOrStdout(), map[string]any{"plan": p.Digest(), "results": []plan.Result{}, "warnings": p.Warnings})
+		}
+		p.Render(cmd.ErrOrStderr())
+		fmt.Fprintln(cmd.OutOrStdout(), nothing)
+		return nil
+	}
+	if err := o.review(cmd, p, ao); err != nil {
+		if errors.Is(err, errBack) {
+			return wizard.ErrCanceled
+		}
+		return err
+	}
+	results, err := o.apply(cmd, p, plan.NewEnv(), ao)
+	if o.json {
+		_ = writeJSON(cmd.OutOrStdout(), map[string]any{"plan": p.Digest(), "results": results})
+	}
+	return err
+}
+
+// ---- companion ssh-config ----
+
+// sshConfigSetup resolves the alias file, the Include mode and the longarm
+// runner for hubID from flags and [companions.ssh].
+func (o *options) sshConfigSetup(hubID, file, include string) (flows.SSHConfigRequest, flows.SSHConfigDeps, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return flows.SSHConfigRequest{}, flows.SSHConfigDeps{}, err
+	}
+	cfg := o.cfg.Companions.SSH
+	if file == "" {
+		file = cfg.File
+	}
+	if file == "" {
+		file = companion.DefaultAliasFile(home)
+	} else if rest, ok := strings.CutPrefix(file, "~/"); ok {
+		file = filepath.Join(home, rest)
+	}
+	if file, err = filepath.Abs(file); err != nil {
+		return flows.SSHConfigRequest{}, flows.SSHConfigDeps{}, err
+	}
+	if include == "" {
+		include = cfg.Include
+	}
+	switch include {
+	case "", flows.IncludeAuto, flows.IncludeYes, flows.IncludeNo:
+	default:
+		return flows.SSHConfigRequest{}, flows.SSHConfigDeps{}, usage("--include must be auto, yes or no, not %q", include)
+	}
+	configDir := ""
+	if h, ok := o.cfg.Hub(hubID); ok {
+		configDir = h.ConfigDir
+	} else if hubID != "" {
+		return flows.SSHConfigRequest{}, flows.SSHConfigDeps{}, usage("no hub %q in %s", hubID, o.cfg.Path())
+	}
+	run := o.deps.Longarm
+	req := flows.SSHConfigRequest{File: file, UserConfig: companion.UserSSHConfig(home), Home: home, Include: include}
+	deps := flows.SSHConfigDeps{Tools: o.deps.Companion, Longarm: func(ctx context.Context, args ...string) ([]byte, error) {
+		return run(ctx, configDir, args...)
+	}}
+	return req, deps, nil
+}
+
+func companionSSHConfigCommand(o *options) *cobra.Command {
+	var all, remove bool
+	var file, include, hubID string
+	var ao applyOptions
+	c := &cobra.Command{
+		Use:   "ssh-config [worker...]",
+		Short: "Set up OpenSSH aliases longarm-<worker> that reach workers through Longarm",
+		Long: `Longarm workers run a built-in sshd that is reachable only through
+` + "`longarm proxy <worker>`" + ` over the hub's mTLS channel: keyless, and without a direct
+route or an open port. This writes the OpenSSH aliases for it, so plain ssh,
+scp, VS Code Remote-SSH, hc and herdr can use ` + "`ssh longarm-<worker>`" + `:
+
+  1. ` + "`longarm ssh-config <worker...>`" + ` (it also records the workers' host keys
+     in Longarm's known_hosts) merged into a file lazylongarm owns,
+     ~/.ssh/lazylongarm/longarm.conf by default ([companions.ssh] file);
+  2. an Include of that file in a marked block at the top of ~/.ssh/config
+     (a backup is kept as ~/.ssh/config.lazylongarm.bak). --include no (or
+     [companions.ssh] include = "no") never edits ~/.ssh/config and prints the
+     line instead; that is also the default when chezmoi manages the file,
+     since chezmoi apply would undo the edit (--include yes edits it anyway);
+  3. a check that ssh resolves each alias through longarm.
+
+Workers ssh already resolves through longarm are skipped. --remove takes out
+the marked block and the alias file and nothing else.
+
+Workers are lazylongarm targets (by name or worker name) or Longarm worker
+names; --all is every remote target.`,
+		Example: `  lazylongarm companion ssh-config worker-1 worker-2
+  lazylongarm companion ssh-config --all --include no
+  lazylongarm companion ssh-config --remove`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.load(); err != nil {
+				return err
+			}
+			req, deps, err := o.sshConfigSetup(hubID, file, include)
+			if err != nil {
+				return err
+			}
+			if remove {
+				if len(args) > 0 || all {
+					return usage("--remove takes no workers: it removes the whole alias file and the Include block")
+				}
+				return o.runLocalPlan(cmd, flows.BuildCompanionSSHConfigRemove(req), ao, "Nothing to remove.")
+			}
+			targets, err := o.pickTargetsAs(cmd, args, all, true, "Set up ssh aliases for which workers?", "Space toggles, enter confirms.", nil)
+			if err != nil {
+				return err
+			}
+			for _, t := range targets {
+				req.Workers = append(req.Workers, targetWorker(t))
+			}
+			st, err := flows.ReadSSHConfigState(cmd.Context(), req, o.deps.Companion)
+			if err != nil {
+				return err
+			}
+			p, err := flows.BuildCompanionSSHConfig(req, st, deps)
+			if err != nil {
+				return usage("%v", err)
+			}
+			if err := o.runLocalPlan(cmd, p, ao, "ssh already reaches them through longarm."); err != nil {
+				return err
+			}
+			if !ao.dryRun && !o.json && len(p.Steps) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nTry: ssh %s\n", companion.LongarmAlias(req.Workers[0]))
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&all, "all", false, "every fleet machine lazylongarm manages")
+	c.Flags().BoolVar(&remove, "remove", false, "remove the Include block from ~/.ssh/config and delete the alias file")
+	c.Flags().StringVar(&file, "file", "", "alias file lazylongarm writes (default: [companions.ssh] file, else ~/.ssh/lazylongarm/longarm.conf)")
+	c.Flags().StringVar(&include, "include", "", "how the file reaches ssh: auto (edit ~/.ssh/config unless chezmoi manages it), yes, no (default: [companions.ssh] include, else auto)")
+	c.Flags().StringVar(&hubID, "hub", "", "hub whose Longarm client config to use (default: the default hub)")
 	ao.bind(c)
 	return c
 }

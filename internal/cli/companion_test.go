@@ -112,3 +112,67 @@ func TestCompanionStatusSurvivesAListError(t *testing.T) {
 		t.Fatalf("remotes must fail on an unreadable list: %d %s", code, errOut)
 	}
 }
+
+func TestCompanionSSHConfigAndLongarmRemotesDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	tools := companion.Tools{
+		LookPath: func(name string) (string, error) {
+			if name == "chezmoi" || name == companion.Herdr {
+				return "", errors.New("not found")
+			}
+			return "/bin/" + name, nil
+		},
+		Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "ssh":
+				return []byte("proxycommand none\n"), nil
+			case companion.HC:
+				return []byte(`{"machines":[{"name":"worker-1","target":"worker-1"}]}`), nil
+			}
+			return nil, errors.New("unexpected " + name)
+		},
+	}
+	code, out, errOut := runWith(t, fleetCfg, tools, "companion", "ssh-config", "worker-1", "friend-box", "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("%d %s", code, errOut)
+	}
+	for _, s := range []string{"longarm ssh-config worker-1 friend-box", filepath.Join(home, ".ssh", "lazylongarm", "longarm.conf"), "Include ~/.ssh/lazylongarm/*.conf"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("plan lacks %q: %s", s, out)
+		}
+	}
+	if code, _, errOut := runWith(t, fleetCfg, tools, "companion", "ssh-config", "worker-1", "--include", "maybe", "--dry-run"); code != 2 || !strings.Contains(errOut, "--include") {
+		t.Fatalf("bad --include: %d %s", code, errOut)
+	}
+	if code, _, errOut := runWith(t, fleetCfg, tools, "companion", "ssh-config", "worker-1", "--remove"); code != 2 || !strings.Contains(errOut, "no workers") {
+		t.Fatalf("--remove with workers: %d %s", code, errOut)
+	}
+	if code, _, errOut := runWith(t, fleetCfg, tools, "companion", "ssh-config", "--remove", "--yes"); code != 0 {
+		t.Fatalf("--remove on a clean HOME: %d %s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ssh", "config")); !os.IsNotExist(err) {
+		t.Fatalf("--remove created ~/.ssh/config: %v", err)
+	}
+
+	code, out, errOut = runWith(t, fleetCfg, tools, "companion", "remotes", "--all", "--transport", "longarm", "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("%d %s", code, errOut)
+	}
+	for _, s := range []string{"ssh-aliases", "hc machine add longarm-worker-2 --install --name worker-2", "worker-1 (as worker-1)"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("remotes plan lacks %q: %s", s, out)
+		}
+	}
+	if code, _, errOut := runWith(t, fleetCfg, tools, "companion", "remotes", "--all", "--switch", "--dry-run"); code != 2 || !strings.Contains(errOut, "--transport longarm") {
+		t.Fatalf("--switch without longarm: %d %s", code, errOut)
+	}
+}
+
+func TestCompanionStatusShowsLongarmEntries(t *testing.T) {
+	tools := fakeTools(`{"machines":[{"name":"worker-1","target":"worker-1","state":"connected"},{"name":"w1-la","target":"longarm-worker-1","state":"connected"},{"name":"w2","target":"longarm ssh worker-2 --","state":"connecting"}]}`)
+	code, out, errOut := runWith(t, fleetCfg, tools, "companion", "status", "--no-remote", "--json")
+	if code != 0 || !strings.Contains(out, `"hc": "connected +longarm"`) || !strings.Contains(out, `"hc": "connecting (longarm)"`) {
+		t.Fatalf("%d %s %s", code, out, errOut)
+	}
+}
