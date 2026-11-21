@@ -101,6 +101,23 @@ always installs from its own verified cache.
 The Review, `--dry-run` and `--dry-run --json` list the exact `curl` command,
 URL and destination for each binary.
 
+### When the worker stays offline
+
+`worker add` waits up to two minutes for the hub to report the worker online.
+If it does not, start with `ssh <host> ~/.local/bin/longarmd doctor`: it checks
+the enrollment, certificate, daemon and hub link and says what to run next.
+A Linux service logs to `journalctl -u longarmd`; a `--service user` daemon to
+`~/.longarm/longarmd.out`; the macOS LaunchDaemon keeps no log file.
+
+A worker that joined but has only `~/.longarm/tls/pending.key` (no
+`node.crt`) has not collected its certificate yet. longarmd keeps asking the
+hub and collects it once the hub approves it, so a rerun does not join again.
+If the hub already shows the worker as approved, longarmd cannot reach the
+hub: a proxy or firewall in the way (a Clash/mihomo TUN that lost its
+upstream, for example), or a clock that is far off. The host probe warns
+when the machine's clock differs from this one by more than two minutes;
+proxies such as VMess and TLS both fail with a clock that is hours off.
+
 ## Peer add
 
 `peer add` is `worker add` plus a client enrollment of the machine's own

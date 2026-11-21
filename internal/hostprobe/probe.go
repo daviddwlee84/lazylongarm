@@ -50,6 +50,8 @@ type Facts struct {
 	CPUs          int               `json:"cpus,omitempty"`
 	Listening     []string          `json:"listening,omitempty"` // "tcp 0.0.0.0:443"
 	Containers    []string          `json:"containers,omitempty"`
+	Clock         int64             `json:"clock,omitempty"`      // the machine's Unix time when probed
+	ClockSkew     time.Duration     `json:"clock_skew,omitempty"` // its clock minus this machine's (± half the probe time)
 	ProbedAt      time.Time         `json:"probed_at"`
 	ProbeDuration time.Duration     `json:"probe_duration"`
 }
@@ -71,6 +73,10 @@ func Probe(ctx context.Context, host string) (*Facts, error) {
 	f.Host = host
 	f.ProbedAt = time.Now()
 	f.ProbeDuration = time.Since(start)
+	if f.Clock > 0 {
+		mid := start.Add(f.ProbeDuration / 2)
+		f.ClockSkew = time.Unix(f.Clock, 0).Sub(mid).Truncate(time.Second)
+	}
 	return f, nil
 }
 
@@ -140,6 +146,8 @@ func Parse(out string) (*Facts, error) {
 			f.Listening = append(f.Listening, v)
 		case k == "container":
 			f.Containers = append(f.Containers, v)
+		case k == "clock":
+			f.Clock, _ = strconv.ParseInt(v, 10, 64)
 		case k == "probe_done":
 			done = true
 		}
@@ -225,6 +233,25 @@ func (f *Facts) MemSummary() string {
 		s += fmt.Sprintf(", %.1f GB available", float64(f.MemAvailKB)/1024/1024)
 	}
 	return s
+}
+
+// MaxClockSkew is how far a machine's clock may be off before a plan warns.
+// Proxies such as VMess reject clients more than ~2 minutes off, and TLS
+// certificates look not-yet-valid or expired to a clock that is far off.
+const MaxClockSkew = 2 * time.Minute
+
+// ClockWarning describes a clock that is off by more than MaxClockSkew ("" when fine
+// or unknown).
+func (f *Facts) ClockWarning() string {
+	d := f.ClockSkew
+	if f.Clock == 0 || (d <= MaxClockSkew && d >= -MaxClockSkew) {
+		return ""
+	}
+	dir := "ahead of"
+	if d < 0 {
+		dir, d = "behind", -d
+	}
+	return fmt.Sprintf("the clock on %s is %s %s this machine's: TLS to the hub and proxies such as VMess can fail until it is synced (macOS: Date & Time → Set automatically; Linux: timedatectl set-ntp true)", f.Where(), strings.TrimSuffix(d.Round(time.Minute).String(), "0s"), dir)
 }
 
 // RootEquivalentGroups are groups whose members can become root without a

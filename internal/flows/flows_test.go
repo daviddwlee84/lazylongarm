@@ -2,6 +2,8 @@ package flows
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -303,5 +305,90 @@ func TestUserDaemonPatternSkipsTheCheckingShell(t *testing.T) {
 		if re.MatchString(cmdline) {
 			t.Errorf("pattern matches non-daemon %q", cmdline)
 		}
+	}
+}
+
+// The enroll step looks at the worker's data dir: a certificate means
+// enrolled; a pending key without one means it already asked to join (joining
+// again would leave a second pending node), anything else joins.
+func TestEnrollCheckStates(t *testing.T) {
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "sha256:aa", Mode: config.ModePublic}
+	cases := []struct {
+		name    string
+		hubTOML string
+		files   []string
+		want    bool
+	}{
+		{"nothing", "", nil, false},
+		{"other hub", `address = "other.example.com:7443"`, []string{"tls/node.crt"}, false},
+		{"certificate", `address = "hub.example.com:7443"`, []string{"tls/ca.crt", "tls/node.crt", "tls/node.key"}, true},
+		{"pending", `address = "hub.example.com:7443"`, []string{"tls/ca.crt", "tls/pending.key"}, true},
+		{"tls dir, unknown layout", `address = "hub.example.com:7443"`, []string{"tls/other"}, true},
+	}
+	for _, tc := range cases {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if tc.hubTOML != "" {
+			writeFile(t, filepath.Join(home, ".longarm", "hub.toml"), tc.hubTOML)
+		}
+		for _, f := range tc.files {
+			writeFile(t, filepath.Join(home, ".longarm", f), "x")
+		}
+		p, err := BuildWorkerAdd(WorkerRequest{Name: "worker-1", Hub: hub, Version: "v0.1.42"}, ubuntu(), WorkerDeps{Client: &fakeClient{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := stepByID(t, p, "enroll").Check(context.Background(), plan.NewEnv())
+		if err != nil || got != tc.want {
+			t.Errorf("%s: check %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// Approved at the hub but the worker never collected its certificate (it
+// cannot reach the hub): the timeout says so and points at longarmd doctor.
+func TestOnlineTimeoutNamesUncollectedCertificate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(home, ".longarm", "hub.toml"), `address = "hub.example.com:7443"`)
+	writeFile(t, filepath.Join(home, ".longarm", "tls", "pending.key"), "x")
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "sha256:aa", Mode: config.ModePublic}
+	client := &fakeClient{nodes: []longarm.Node{{Name: "worker-1", Role: "worker", State: "approved"}}}
+	p, err := BuildWorkerAdd(WorkerRequest{Name: "worker-1", Hub: hub, Version: "v0.1.42"}, ubuntu(), WorkerDeps{Client: client, PollInterval: time.Millisecond, WaitTimeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stepByID(t, p, "online").Apply(context.Background(), plan.NewEnv())
+	var fe *plan.FixError
+	if !errors.As(err, &fe) || !strings.Contains(err.Error(), "never collected its certificate") || !strings.HasSuffix(fe.Fix, "longarmd doctor") {
+		t.Fatalf("%v (%+v)", err, fe)
+	}
+
+	// With a certificate it is the plain timeout, with the service's logs.
+	writeFile(t, filepath.Join(home, ".longarm", "tls", "node.crt"), "x")
+	err = stepByID(t, p, "online").Apply(context.Background(), plan.NewEnv())
+	if err == nil || strings.Contains(err.Error(), "certificate") || !strings.Contains(err.Error(), "journalctl -u longarmd") {
+		t.Fatal(err)
+	}
+}
+
+func stepByID(t *testing.T, p *plan.Plan, id string) plan.Step {
+	t.Helper()
+	for _, s := range p.Steps {
+		if s.ID == id {
+			return s
+		}
+	}
+	t.Fatalf("no step %s in %s", id, ids(p))
+	return plan.Step{}
+}
+
+func writeFile(t *testing.T, path, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `worker add` no longer reports "already enrolled" for a worker that joined
+  but never collected its certificate (only `tls/pending.key`). It says so,
+  still skips joining again (that would leave a second pending node), and when
+  the hub shows the worker approved but offline at the timeout, the error says
+  the worker cannot reach the hub (proxy, firewall or clock).
+- The "did not come online" fix is now `longarmd doctor` on the machine; the
+  old hint pointed macOS at `~/.longarm/longarmd.log`, which the LaunchDaemon
+  never writes. Linux and `--service user` logs are named in the error.
+- The host probe reads the machine's clock: probes, `worker add`/`peer add`
+  and `hub setup` reviews warn when it differs from this machine's by more
+  than two minutes.
+
 ## v0.3.0 — 2026-11-21
 
 Upgrading: v0.2.0 refuses a config written by `peer add` from this release
