@@ -81,7 +81,10 @@ joins approved, and only that user can use it. See [Users and sharing](#users-an
 hub's node of that name (after the new code exists, so a failed mint changes
 nothing), joins with `--force`, keeps the old node's labels unless you pass
 `--label` and its owner unless you pass `--owner` (an owned worker never
-silently becomes a fleet worker), and restarts the service, because longarmd reloads certificates of
+silently becomes a fleet worker), and restarts the service (it ends the
+running longarmd as you, no sudo: the systemd unit's `Restart=always` with
+`KillMode=process` and the LaunchDaemon's `KeepAlive` start it again and jobs
+keep running; only when that fails does it use `sudo longarmd service stop`/`start`), because longarmd reloads certificates of
 the same node only. The worker gets a new node ID; its port links go, its job
 history stays with the old ID.
 

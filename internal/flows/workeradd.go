@@ -328,7 +328,7 @@ exec "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$4" --no-wait`, longar
 	case ServiceSystem:
 		display := fmt.Sprintf("%s service install --user %s%s\n%s service start", longarmdPath, f.User, joinArgs(installArgs), longarmdPath)
 		if req.Reenroll {
-			display = fmt.Sprintf("%s service stop + start when it runs (new certificate), else:\n%s", longarmdPath, display)
+			display = fmt.Sprintf("end the running longarmd (as %s, no sudo): systemd/launchd start it again with the new certificate;\nif that does not work: %s service stop + start (sudo); not running: %s", f.User, longarmdPath, display)
 		}
 		p.Steps = append(p.Steps, plan.Step{
 			ID: "service", Title: map[bool]string{true: "Restart the longarmd service with the new certificate", false: "Install and start the longarmd service"}[req.Reenroll], Idempotent: true,
@@ -343,6 +343,29 @@ exec "$1" join "$2" "$code" --ca-fingerprint "$3" --name "$4" --no-wait`, longar
 				return checkResult(err)
 			},
 			Apply: func(ctx context.Context, env *plan.Env) error {
+				if req.Reenroll {
+					// The service runs longarmd as the SSH user, and both
+					// unit (Restart=always, KillMode=process: jobs survive)
+					// and LaunchDaemon (KeepAlive) start it again, so ending
+					// it needs no sudo.
+					r := run(`pat='` + userDaemonPattern + `'
+old=$(pgrep -u "$(id -u)" -f "$pat" | head -n 1)
+[ -n "$old" ] || exit 3
+kill "$old"
+i=0
+while [ "$i" -lt 30 ]; do
+  sleep 1
+  new=$(pgrep -u "$(id -u)" -f "$pat" | head -n 1)
+  if [ -n "$new" ] && [ "$new" != "$old" ]; then echo "longarmd restarted by the service manager (pid $old -> $new)"; exit 0; fi
+  i=$((i+1))
+done
+exit 4`)
+					r.Timeout = 60 * time.Second
+					if _, err := env.Run(ctx, r); err == nil {
+						return nil
+					}
+					env.Logf("  longarmd did not come back by itself; stopping and starting the service (sudo)")
+				}
 				args := append([]string{longarmdPath, f.User, restart}, installArgs...)
 				_, err := env.RunPrivileged(ctx, run(`set -eu
 bin="$1"; user="$2"; restart="$3"; shift 3
