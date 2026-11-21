@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 — 2026-11-21
+
+Upgrading: v0.2.0 refuses a config written by `peer add` from this release
+(unknown `client_name`); upgrade every lazylongarm that shares the config.
+From now on, older builds warn about unknown keys instead of failing.
 
 - `hub panel-access [loopback|tailnet|public]`: reach the web panel on your
   tailnet (installs Tailscale from its apt repository with the signing key
@@ -35,8 +39,15 @@
 - A rerun after an interrupted binaries step installs only the binary that is
   missing or different; one already identical is no longer copied again. The
   check no longer downloads the binaries on this machine, only `SHA256SUMS`.
-- Docs: `worker add` uses an admin join code when you hold an admin
-  certificate (the docs said owner code).
+- Dashboard and wizards redesigned: a shared theme (16 ANSI colors, readable
+  in light and dark terminals; `NO_COLOR`/`--color never` keep the markers),
+  rounded panes with column headers, centered help/kill modals (kill defaults
+  to Cancel), and a job log that follows its tail until you scroll up. Wizards
+  are a one-column form with distinct focus, cursor and choice markers.
+- Mouse on by default: click tabs, rows and footer hints, wheel-scroll the
+  pane under the pointer, drag over the right pane to copy whole lines (OSC 52
+  plus the local clipboard). `y` copies the job log, details or panel URL; `M`
+  toggles the mouse, `[tui] mouse = false` turns it off by default.
 - Fix: overlapping `worker add` runs (or any two commands that record to the
   config, such as `hub setup` and `companion dotfiles`) no longer lose the
   second run's record with "config file changed since it was loaded; reload
@@ -56,6 +67,8 @@
   longer skips itself as "already in place" when no daemon is running. Its
   `pgrep -f` pattern matched the checking shell's own command line; it is now
   anchored to a command line that starts with `longarmd run`.
+- Docs: `worker add` uses an admin join code when you hold an admin
+  certificate (the docs said owner code).
 
 ## v0.2.0 — 2026-11-21
 
