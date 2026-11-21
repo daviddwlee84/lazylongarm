@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -155,25 +156,66 @@ func TestFleetCompanionActions(t *testing.T) {
 func TestPanelKeyOpensDirectURLWithoutTunnel(t *testing.T) {
 	cfg := &config.Config{Hubs: []config.Hub{{ID: "hub-1", Mode: "public", Address: "hub.example.com:7443", SSHHost: "my-vps",
 		PanelAccess: &config.PanelAccess{Mode: config.PanelTailnet, URL: "https://hub-1.tail1234.ts.net/"}}}, DefaultHub: "hub-1"}
-	var opened []string
-	m := New(Options{Config: cfg, OpenURL: func(u string) error { opened = append(opened, u); return nil }})
+	var opened, checked []string
+	onTailnet := true
+	m := New(Options{Config: cfg, OpenURL: func(u string) error { opened = append(opened, u); return nil },
+		TailnetCheck: func(_ context.Context, u string) (bool, string) {
+			checked = append(checked, u)
+			if onTailnet {
+				return true, ""
+			}
+			return false, "Tailscale is not installed on this machine"
+		}})
 	m.width, m.height = 120, 30
 	m.tab = tabHub
-	if cmd := m.togglePanel(); cmd != nil || m.panelPending {
-		t.Fatal("a tailnet panel must not open an SSH tunnel")
+
+	// On the tailnet: p checks, then opens the URL; no tunnel.
+	cmd := m.togglePanel()
+	if cmd == nil {
+		t.Fatal("p did not check Tailscale")
 	}
-	if len(opened) != 1 || opened[0] != "https://hub-1.tail1234.ts.net/" {
-		t.Fatalf("opened %v", opened)
+	m.Update(cmd())
+	if m.panelPending || len(checked) != 1 || len(opened) != 1 || opened[0] != "https://hub-1.tail1234.ts.net/" {
+		t.Fatalf("pending %v checked %v opened %v", m.panelPending, checked, opened)
 	}
 	ids := map[string]bool{}
 	for _, a := range m.actions() {
 		ids[a.id] = a.enabled
 	}
-	if !ids["panel-access"] || !ids["panel"] {
+	if !ids["panel-access"] || !ids["panel"] || !ids["panel-tunnel"] {
 		t.Fatalf("hub actions: %v", ids)
 	}
-	if v, _ := m.panelLine(&cfg.Hubs[0]); !strings.Contains(v, "tail1234.ts.net") {
-		t.Fatal(v)
+	if v, hint := m.panelLine(&cfg.Hubs[0]); !strings.Contains(v, "tail1234.ts.net") || !strings.Contains(hint, "T tunnel") {
+		t.Fatal(v, hint)
+	}
+
+	// Off the tailnet: p falls back to the SSH tunnel and says why.
+	onTailnet = false
+	_, next := m.Update(m.togglePanel()())
+	if next == nil || !m.panelPending || len(opened) != 1 || !strings.Contains(m.panelNote, "not installed") {
+		t.Fatalf("no tunnel fallback: pending %v note %q opened %v", m.panelPending, m.panelNote, opened)
+	}
+}
+
+// T opens the SSH tunnel without asking Tailscale; a public URL opens
+// directly without a check.
+func TestPanelTunnelKeyAndPublicURL(t *testing.T) {
+	cfg := &config.Config{Hubs: []config.Hub{{ID: "hub-1", Mode: "public", Address: "hub.example.com:7443", SSHHost: "my-vps",
+		PanelAccess: &config.PanelAccess{Mode: config.PanelPublic, URL: "https://hub.example.com/", Domain: "hub.example.com"}}}, DefaultHub: "hub-1"}
+	var opened []string
+	checks := 0
+	m := New(Options{Config: cfg, OpenURL: func(u string) error { opened = append(opened, u); return nil },
+		TailnetCheck: func(context.Context, string) (bool, string) { checks++; return true, "" }})
+	m.width, m.height = 120, 30
+	m.Update(key("3"))
+	if cmd := m.togglePanel(); cmd != nil || len(opened) != 1 || checks != 0 {
+		t.Fatalf("public: cmd %v opened %v checks %d", cmd != nil, opened, checks)
+	}
+	if _, cmd := m.Update(key("T")); cmd == nil {
+		t.Fatal("T returned no tunnel command")
+	}
+	if !m.panelPending || m.panelNote != "" || checks != 0 {
+		t.Fatalf("T: pending %v note %q checks %d", m.panelPending, m.panelNote, checks)
 	}
 }
 

@@ -114,3 +114,38 @@ func TestSkillPrints(t *testing.T) {
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
+
+// hub panel opens a tailnet URL only when this machine is on that tailnet;
+// otherwise it says why and goes for the SSH tunnel.
+func TestHubPanelTailnetRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := `default_hub = "hub-1"
+[[hubs]]
+id = "hub-1"
+mode = "public"
+address = "hub.example.com:7443"
+ssh_host = "hub-host.invalid"
+[hubs.panel_access]
+mode = "tailnet"
+url = "https://hub-1.tail1234.ts.net/"
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := tailnetCheck
+	defer func() { tailnetCheck = old }()
+
+	tailnetCheck = func(context.Context, string) (bool, string) { return true, "" }
+	code, out, errOut := run(t, false, "--config", path, "hub", "panel", "--no-browser")
+	if code != 0 || !strings.Contains(out, "panel: https://hub-1.tail1234.ts.net/") {
+		t.Fatalf("on tailnet: exit %d\n%s\n%s", code, out, errOut)
+	}
+
+	tailnetCheck = func(context.Context, string) (bool, string) {
+		return false, "Tailscale is not installed on this machine"
+	}
+	_, out, errOut = run(t, false, "--config", path, "hub", "panel", "--no-browser")
+	if strings.Contains(out, "ts.net") || !strings.Contains(errOut, "not installed on this machine: using the SSH tunnel instead") {
+		t.Fatalf("off tailnet:\n%s\n%s", out, errOut)
+	}
+}

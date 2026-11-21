@@ -23,6 +23,7 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
 	"github.com/daviddwlee84/lazylongarm/internal/release"
+	"github.com/daviddwlee84/lazylongarm/internal/tailscalehost"
 	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 	"github.com/skip2/go-qrcode"
 	"github.com/spf13/cobra"
@@ -425,7 +426,9 @@ func hubPanelCommand(o *options) *cobra.Command {
 		Long: `The panel listens on loopback on the hub host. This opens an app-owned
 ssh -L tunnel to it, prints the URL and opens a browser; the tunnel lives
 until Ctrl+C. When ` + "`hub panel-access`" + ` put the panel on your tailnet or on
-public HTTPS, it opens that URL instead (--tunnel forces the tunnel).
+public HTTPS, it opens that URL instead (--tunnel forces the tunnel); a
+tailnet URL only when this machine's Tailscale is connected to that tailnet,
+else it says why and uses the tunnel.
 --create-user adds a panel login (password + TOTP) first.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -451,11 +454,18 @@ public HTTPS, it opens that URL instead (--tunnel forces the tunnel).
 				}
 			}
 			if u := h.PanelURL(); u != "" && !tunnel {
-				fmt.Fprintf(cmd.OutOrStdout(), "panel: %s  (%s; log in with a panel account + TOTP; --tunnel for the SSH tunnel)\n", u, h.PanelMode())
-				if !noBrowser {
-					_ = openBrowser(u)
+				ok, why := true, ""
+				if h.PanelMode() == config.PanelTailnet {
+					ok, why = tailnetCheck(cmd.Context(), u)
 				}
-				return nil
+				if ok {
+					fmt.Fprintf(cmd.OutOrStdout(), "panel: %s  (%s; log in with a panel account + TOTP; --tunnel for the SSH tunnel)\n", u, h.PanelMode())
+					if !noBrowser {
+						_ = openBrowser(u)
+					}
+					return nil
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "! %s: using the SSH tunnel instead of %s\n", why, u)
 			}
 			t, err := connection.OpenTunnel(cmd.Context(), h.SSHHost, port, orDefault(h.Panel, "127.0.0.1:7480"))
 			if err != nil {
@@ -682,6 +692,10 @@ func askPanelUser(cmd *cobra.Command) (string, error) {
 	}
 	return strings.TrimSpace(values["name"]), err
 }
+
+// tailnetCheck reports whether this machine can open a tailnet URL (a
+// variable so tests can stub Tailscale).
+var tailnetCheck = tailscalehost.LocalCheck
 
 func openBrowser(url string) error {
 	var c *exec.Cmd

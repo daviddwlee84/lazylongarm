@@ -130,7 +130,7 @@ back with `longarm admin revoke <worker>-client`.
 | `lazylongarm` | dashboard (TTY); help otherwise |
 | `hub setup` | install/repair a hub (wizard, or `--host` + `--address`) |
 | `hub status` | service, healthz, reachability, NSG rules, enrollment |
-| `hub panel [--create-user NAME]` | tunnel to the loopback panel, or open its tailnet/public URL (offers to create the first login) |
+| `hub panel [--create-user NAME] [--tunnel]` | open the panel's tailnet/public URL (a tailnet one only when this machine is on that tailnet), else an SSH tunnel to the loopback panel (offers to create the first login) |
 | `hub panel-user [NAME]` | create a web panel login (password + TOTP) |
 | `hub panel-access [loopback\|tailnet\|public]` | reach the panel over SSH only, on your tailnet (installs Tailscale, `tailscale serve`), or on public HTTPS (Let's Encrypt) |
 | `hub backup` | stop briefly, archive `/var/lib/longarm-hub` into the state dir (0600) |

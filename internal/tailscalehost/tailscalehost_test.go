@@ -1,6 +1,7 @@
 package tailscalehost
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,35 @@ func TestSources(t *testing.T) {
 	}
 	if !strings.Contains(SourcesContent("debian", "bookworm"), "deb [signed-by="+Keyring+"] https://pkgs.tailscale.com/stable/debian bookworm main") {
 		t.Fatal(SourcesContent("debian", "bookworm"))
+	}
+}
+
+func TestCheckStatus(t *testing.T) {
+	const u = "https://hub-1.tail1234.ts.net/"
+	running := func(suffix, self string) Status {
+		var s Status
+		s.BackendState, s.MagicDNSSuffix, s.Self.DNSName = "Running", suffix, self
+		return s
+	}
+	cases := []struct {
+		name string
+		st   Status
+		err  error
+		ok   bool
+		why  string
+	}{
+		{"same tailnet", running("tail1234.ts.net", "mac.tail1234.ts.net."), nil, true, ""},
+		{"older client, suffix from own name", running("", "mac.tail1234.ts.net."), nil, true, ""},
+		{"other tailnet", running("other-99.ts.net", "mac.other-99.ts.net."), nil, false, "tailnet other-99.ts.net"},
+		{"stopped", Status{BackendState: "Stopped"}, nil, false, "is Stopped"},
+		{"needs login", Status{BackendState: "NeedsLogin"}, nil, false, "is NeedsLogin"},
+		{"no cli", Status{}, ErrNoCLI, false, "not installed"},
+		{"daemon down", Status{}, errors.New("tailscale status: failed to connect to local Tailscale service"), false, "did not answer"},
+	}
+	for _, tc := range cases {
+		ok, why := CheckStatus(tc.st, tc.err, u)
+		if ok != tc.ok || !strings.Contains(why, tc.why) {
+			t.Errorf("%s: %v %q", tc.name, ok, why)
+		}
 	}
 }

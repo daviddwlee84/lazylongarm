@@ -19,6 +19,7 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/fleet"
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
+	"github.com/daviddwlee84/lazylongarm/internal/tailscalehost"
 	"github.com/daviddwlee84/lazylongarm/internal/ui/theme"
 	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 )
@@ -32,6 +33,9 @@ type Options struct {
 	Refresh    time.Duration
 	Color      bool
 	OpenURL    func(string) error
+	// TailnetCheck reports whether this machine can open a tailnet URL
+	// (default: tailscalehost.LocalCheck).
+	TailnetCheck func(ctx context.Context, url string) (bool, string)
 	// Mouse captures the mouse (click, wheel, drag-to-copy); M toggles it.
 	Mouse bool
 	// Clipboard writes the local clipboard; copies also go through the
@@ -92,6 +96,7 @@ type Model struct {
 	toolBusy     bool
 	panel        *connection.Tunnel
 	panelPending bool
+	panelNote    string // why the tunnel was used instead of the tailnet URL
 	quitting     bool
 }
 
@@ -114,6 +119,9 @@ func New(opts Options) *Model {
 	}
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
+	}
+	if opts.TailnetCheck == nil {
+		opts.TailnetCheck = tailscalehost.LocalCheck
 	}
 	m := &Model{opts: opts, th: theme.New(opts.Color, true), mouse: opts.Mouse, width: 100, height: 30, logs: map[string]logState{}, execOut: map[string]string{}}
 	m.setConfig(opts.Config)
@@ -291,8 +299,18 @@ type panelMsg struct {
 }
 type panelClosedMsg struct{ t *connection.Tunnel }
 
-// togglePanel opens (or closes) a dashboard-owned tunnel to the hub's
-// loopback panel; the dashboard stays usable and closes it on exit.
+// panelRouteMsg is the result of checking whether this machine can open the
+// hub's tailnet URL.
+type panelRouteMsg struct {
+	url string
+	ok  bool
+	why string
+}
+
+// togglePanel opens (or closes) the panel: the hub's tailnet/public URL when
+// it has one (a tailnet URL only when this machine is on that tailnet), else
+// a dashboard-owned tunnel to its loopback panel; the dashboard stays usable
+// and closes the tunnel on exit.
 func (m *Model) togglePanel() tea.Cmd {
 	if m.panel != nil {
 		_ = m.panel.Close()
@@ -303,17 +321,44 @@ func (m *Model) togglePanel() tea.Cmd {
 	if m.hub == nil || m.panelPending {
 		return nil
 	}
-	if u := m.hub.PanelURL(); u != "" {
-		m.status = "panel: " + u + " (" + m.hub.PanelMode() + "; log in with a panel account + TOTP)"
-		if m.opts.OpenURL != nil {
-			_ = m.opts.OpenURL(u)
-		}
-		return nil
+	u := m.hub.PanelURL()
+	if u == "" {
+		return m.openTunnel("")
 	}
-	if m.hub.SSHHost == "" {
+	if m.hub.PanelMode() != config.PanelTailnet {
+		m.openDirect(u, "")
 		return nil
 	}
 	m.panelPending = true
+	m.setStatus("pending", "checking Tailscale on this machine…")
+	ctx, check := m.opts.Ctx, m.opts.TailnetCheck
+	return func() tea.Msg {
+		ok, why := check(ctx, u)
+		return panelRouteMsg{url: u, ok: ok, why: why}
+	}
+}
+
+// openDirect opens the hub's tailnet/public panel URL in the browser.
+func (m *Model) openDirect(u, warn string) {
+	if warn != "" {
+		m.setStatus("warn", warn+"; opening "+u+" anyway (no SSH host for a tunnel)")
+	} else {
+		m.setStatus("ok", "panel: "+u+" ("+m.hub.PanelMode()+"; log in with a panel account + TOTP; T for the SSH tunnel)")
+	}
+	if m.opts.OpenURL != nil {
+		_ = m.opts.OpenURL(u)
+	}
+}
+
+// openTunnel opens a dashboard-owned SSH tunnel to the hub's loopback panel;
+// note says why it is used instead of the hub's URL ("" when that is not the
+// question).
+func (m *Model) openTunnel(note string) tea.Cmd {
+	if m.hub == nil || m.hub.SSHHost == "" || m.panel != nil || m.panelPending {
+		return nil
+	}
+	m.panelPending = true
+	m.panelNote = note
 	m.setStatus("pending", "opening the panel tunnel…")
 	host, remote, ctx := m.hub.SSHHost, m.hub.Panel, m.opts.Ctx
 	if remote == "" {
@@ -499,11 +544,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.panel = msg.t
-		m.setStatus("ok", "panel: "+m.PanelURL()+" (log in with a panel account + TOTP; p closes, y copies, U creates a login)")
+		if m.panelNote != "" {
+			m.setStatus("warn", "panel: "+m.PanelURL()+" via SSH tunnel ("+m.panelNote+"); p closes, y copies")
+		} else {
+			m.setStatus("ok", "panel: "+m.PanelURL()+" (log in with a panel account + TOTP; p closes, y copies, U creates a login)")
+		}
 		if m.opts.OpenURL != nil {
 			_ = m.opts.OpenURL(m.PanelURL())
 		}
 		return m, waitPanel(msg.t)
+	case panelRouteMsg:
+		m.panelPending = false
+		if msg.ok || m.hub == nil || m.hub.SSHHost == "" {
+			if m.hub != nil {
+				m.openDirect(msg.url, msg.why)
+			}
+			return m, nil
+		}
+		return m, m.openTunnel(msg.why)
 	case panelClosedMsg:
 		if m.panel == msg.t {
 			m.panel = nil
@@ -866,6 +924,7 @@ func (m *Model) actions() []action {
 		out = append(out,
 			action{"setup", map[bool]string{true: "rerun hub setup", false: "hub setup"}[hasHub], []string{"S"}, !m.toolBusy, func() tea.Cmd { return m.runTool("Hub setup", "hub", "setup") }},
 			action{"panel", map[bool]string{true: "close panel", false: "web panel"}[m.panel != nil], []string{"p"}, hasHub && (m.hub.SSHHost != "" || m.hub.PanelURL() != "") && !m.panelPending, func() tea.Cmd { return m.togglePanel() }},
+			action{"panel-tunnel", "SSH tunnel", []string{"T"}, hasHub && m.hub.SSHHost != "" && m.hub.PanelURL() != "" && m.panel == nil && !m.panelPending, func() tea.Cmd { return m.openTunnel("") }},
 			action{"panel-user", "panel logins", []string{"U"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel login", "hub", "panel-user") }},
 			action{"panel-access", "panel access", []string{"A"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel access", "hub", "panel-access") }},
 		)
