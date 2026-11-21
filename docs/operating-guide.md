@@ -145,7 +145,7 @@ run.
 |---|---|---|
 | 1 Fleet | hub registry merged with managed targets: state, CPU, memory; details add path (relay/direct), labels, last seen | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
 | 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail that follows new output until you scroll up | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
-| 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel (tunnel on/off, or the tailnet/public URL) · `T` SSH tunnel even when there is a URL · `U` panel login · `A` panel access |
+| 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel (tunnel on/off, or the tailnet/public URL) · `U` panel login · `A` panel access |
 
 Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus the right
 pane (j/k, PgUp/PgDn scroll it) · `y` copy the job log, the details or the open
@@ -305,12 +305,12 @@ previous one.
   these settings. Sign-in with Google and others is not configured yet.
 - `hub status` adds a `panel-access` check (HTTPS answer and certificate days
   left, or whether `tailscale serve` still proxies the panel), and `hub panel`
-  / `p` open the URL directly (`hub panel --tunnel` or `T` in the dashboard
-  force the tunnel). A tailnet URL is opened only when this machine's
-  Tailscale is connected to that tailnet (`tailscale status --json`, also
-  the CLI inside `/Applications/Tailscale.app` on macOS); when it is not
-  installed, stopped, logged out or on another tailnet, both say why and use
-  the SSH tunnel instead.
+  / `p` open the URL directly (`hub panel --tunnel` forces the tunnel). A
+  tailnet URL is opened only when this machine's Tailscale is connected to
+  that tailnet (`tailscale status --json`, also the CLI inside
+  `/Applications/Tailscale.app` on macOS); when it is not installed, stopped,
+  logged out or on another tailnet, both say why and use the SSH tunnel
+  instead.
 
 Ctrl+C during any terminal handoff from the dashboard (wizards, `hub panel`,
 `longarm logs -f`) ends only that command and returns to the dashboard.
