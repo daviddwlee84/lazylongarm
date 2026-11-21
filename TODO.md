@@ -38,8 +38,15 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   a root:longarm-hub 0640 file, set `admins` / `allowed`.
 - **Later devices of a user via `/link` (P2, M)**: once a user has a device,
   upstream refuses user-bound codes; `peer add` now stops with the manual
-  steps. Automate them: run `longarm login <hub>` on the machine, open an SSH
-  tunnel to the loopback panel, show the `/link` URL and wait for approval.
+  steps. Automate them: run `longarm login --no-browser` on the machine (over
+  SSH), open the panel's `/link` (tailnet or SSH tunnel, not the URL login
+  prints), show the code and wait for approval. Approving needs the user's own
+  panel login (made with its first device) or an admin login named like the
+  user (the device becomes an admin): say which before starting.
+- **A reachable `/link` URL from `longarm login` (P3, S)**: the hub prints
+  `public_url` + `/link`, else the gRPC host with the HTTP port, which fails
+  for a loopback panel. Evaluate setting `public_url` from `hub panel-access`
+  (tailnet/public); check what else it changes (install URLs, tailnet config).
 - **Pin `[access]` and end-to-end trust on owned workers (P2, M)**: after
   `worker add --owner`, offer to write `[access] owners/users` (and
   `hub_job_details = false`) into `longarmd.toml`, `longarmd trust add-user`

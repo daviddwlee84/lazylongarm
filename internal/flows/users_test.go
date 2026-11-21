@@ -240,3 +240,32 @@ func TestRenderInvite(t *testing.T) {
 		t.Fatalf("fallbacks:\n%s", text)
 	}
 }
+
+// Without a panel login made now, the user's later devices can only be
+// approved by an admin panel login named like it: the review says so.
+func TestUserSelfWarnsWithoutPanel(t *testing.T) {
+	req, client := selfFixture(t)
+	warned := func(r SelfRequest, users longarm.UserList) bool {
+		t.Helper()
+		p, err := BuildUserSelf(r, client.who, users, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(strings.Join(p.Warnings, "\n"), "lazylongarm hub panel-user alice")
+	}
+	if warned(req, longarm.UserList{}) {
+		t.Fatal("warned although --panel makes the login")
+	}
+	noPanel := req
+	noPanel.Panel = false
+	if !warned(noPanel, longarm.UserList{}) {
+		t.Fatal("no warning without --panel")
+	}
+	// an existing user (no device yet) gets no second login: warn unless it has one
+	if !warned(req, longarm.UserList{Tenancy: true, Users: []longarm.User{{Name: "alice"}}}) {
+		t.Fatal("no warning for an existing user without a panel login")
+	}
+	if warned(req, longarm.UserList{Tenancy: true, Users: []longarm.User{{Name: "alice", Panel: true}}}) {
+		t.Fatal("warned although the user has a panel login")
+	}
+}

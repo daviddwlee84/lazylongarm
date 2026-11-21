@@ -312,6 +312,8 @@ func TestPeerValidation(t *testing.T) {
 		{PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Mint: MintOwner}}, "needs an admin certificate"},
 		{PeerRequest{WorkerRequest: base, Tenancy: true}, "--client-user"},
 		{PeerRequest{WorkerRequest: base, ClientName: "bad name"}, "client name"},
+		{PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1}, "admin panel login named alice"},
+		{PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1, ClientUserPanel: true}, "alice's panel login (a client certificate)"},
 	}
 	for _, tc := range cases {
 		req := PeerDefaults(tc.req, ubuntu())
