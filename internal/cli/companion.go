@@ -501,8 +501,10 @@ func (o *options) dotfilesSource(cmd *cobra.Command, f *dotfilesFlags) error {
 	}
 	f.repo = strings.TrimSpace(values["repo"])
 	if values["save"] == "true" {
-		o.cfg.Companions.Dotfiles.Repo = f.repo
-		if err := o.cfg.Save(); err != nil {
+		if err := o.cfg.Update(func(c *config.Config) error {
+			c.Companions.Dotfiles.Repo = f.repo
+			return nil
+		}); err != nil {
 			return err
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "  saved [companions.dotfiles] repo in %s\n", o.cfg.Path())

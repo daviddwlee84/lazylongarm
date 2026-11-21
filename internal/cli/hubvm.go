@@ -305,8 +305,11 @@ func vmDeletePlan(o *options, h *config.Hub, ref cloudvm.Ref, backup string, kee
 			ID: "forget-hub", Title: "Forget hub " + h.ID + " and its targets in lazylongarm's config", Idempotent: true,
 			Actions: []plan.Action{{Where: "local", Display: "remove [[hubs]] " + h.ID + " and targets with hub = " + h.ID}},
 			Apply: func(ctx context.Context, env *plan.Env) error {
-				o.cfg.RemoveHub(h.ID)
-				return o.cfg.Save()
+				id := h.ID // h may point into the config that Update replaces
+				return o.cfg.Update(func(c *config.Config) error {
+					c.RemoveHub(id)
+					return nil
+				})
 			},
 		})
 	}

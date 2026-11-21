@@ -75,7 +75,12 @@ func TestCompanionRemotesApplyRegistersAndVerifies(t *testing.T) {
 func dotfilesCfg(t *testing.T) *config.Config {
 	t.Helper()
 	c, _ := config.Load(filepath.Join(t.TempDir(), "c.toml"), false)
-	c.UpsertTarget(config.Target{ID: "worker-1", Name: "worker-1", SSHHost: "worker-1"})
+	if err := c.Update(func(c *config.Config) error {
+		c.UpsertTarget(config.Target{ID: "worker-1", Name: "worker-1", SSHHost: "worker-1"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return c
 }
 

@@ -18,7 +18,8 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-// ErrConflict means the file changed on disk after it was loaded.
+// ErrConflict means the file changed on disk after it was loaded. Only Save
+// (a whole-document write) returns it; Update merges instead.
 var ErrConflict = errors.New("config file changed since it was loaded; reload and retry")
 
 // Hub modes.
@@ -130,17 +131,23 @@ func (c *Config) Path() string { return c.path }
 
 // Load reads path. A missing file yields an empty config unless explicit.
 func Load(path string, explicit bool) (*Config, error) {
-	c := &Config{path: path}
-	data, err := os.ReadFile(path)
+	c, err := read(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if explicit {
 			return nil, fmt.Errorf("config file %s does not exist", path)
 		}
-		return c, nil
+		return &Config{path: path}, nil
 	}
+	return c, err
+}
+
+// read parses and validates path, remembering the digest of what it read.
+func read(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	c := &Config{}
 	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -290,20 +297,45 @@ func (c *Config) TargetByHost(sshHost string) (*Target, bool) {
 	return nil, false
 }
 
-// Save writes atomically with a lock, refusing to overwrite edits made by
-// another process since Load (ErrConflict).
-func (c *Config) Save() error {
-	if c.path == "" {
-		return errors.New("config path is unknown")
+// Update is how commands change the config: a short read-modify-write
+// under the lock. It re-reads the file, applies mutate to that fresh copy,
+// validates and writes it, and then makes c reflect what was written. Edits
+// that other processes saved since c was loaded survive (two `worker add`
+// runs that finish minutes apart both keep their target), and a retry after
+// a failure starts again from the current file. mutate should change only
+// the entries its operation owns; for those, the last writer wins. When
+// mutate returns an error nothing is written and c is left as it was.
+func (c *Config) Update(mutate func(*Config) error) error {
+	unlock, err := c.lock()
+	if err != nil {
+		return err
 	}
+	defer unlock()
+	fresh, err := read(c.path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		fresh = &Config{path: c.path}
+	case err != nil:
+		return err
+	}
+	if err := mutate(fresh); err != nil {
+		return err
+	}
+	if err := fresh.write(); err != nil {
+		return err
+	}
+	*c = *fresh
+	return nil
+}
+
+// Save writes the whole in-memory document, refusing to overwrite edits made
+// by another process since Load (ErrConflict). Commands that change some
+// entries use Update instead, which merges with concurrent edits.
+func (c *Config) Save() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	dir := filepath.Dir(c.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	unlock, err := lockFile(c.path + ".lock")
+	unlock, err := c.lock()
 	if err != nil {
 		return err
 	}
@@ -321,6 +353,27 @@ func (c *Config) Save() error {
 			return ErrConflict
 		}
 	}
+	return c.write()
+}
+
+// lock takes the config's lock file, creating the directory if needed.
+func (c *Config) lock() (func(), error) {
+	if c.path == "" {
+		return nil, errors.New("config path is unknown")
+	}
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
+		return nil, err
+	}
+	return lockFile(c.path + ".lock")
+}
+
+// write validates c and replaces the file atomically; the caller holds the
+// lock. c's digest then matches the file.
+func (c *Config) write() error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	dir := filepath.Dir(c.path)
 	var buf bytes.Buffer
 	buf.WriteString("# lazylongarm configuration (written by lazylongarm; safe to edit while it is not running)\n")
 	enc := toml.NewEncoder(&buf)

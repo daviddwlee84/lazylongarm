@@ -10,6 +10,12 @@
 - The host probe reports the account's Unix groups.
 - Docs: `worker add` uses an admin join code when you hold an admin
   certificate (the docs said owner code).
+- Fix: overlapping `worker add` runs (or any two commands that record to the
+  config, such as `hub setup` and `companion dotfiles`) no longer lose the
+  second run's record with "config file changed since it was loaded; reload
+  and retry". Each save now re-reads the config under its lock and changes
+  only its own target or hub, so a retry of the step also succeeds instead of
+  failing again with the same stale copy. `peer add` records the same way.
 
 ## v0.2.0 — 2026-11-21
 

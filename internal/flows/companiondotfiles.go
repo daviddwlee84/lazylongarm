@@ -215,25 +215,35 @@ func BuildCompanionDotfiles(req DotfilesRequest, f *hostprobe.Facts, current com
 			if deps.Config == nil {
 				return nil
 			}
-			t, ok := deps.Config.TargetByHost(req.Host)
-			if !ok {
+			id := ""
+			if err := deps.Config.Update(func(c *config.Config) error {
+				t, ok := c.TargetByHost(req.Host)
+				if !ok {
+					return errNotTarget
+				}
+				if req.Bundle != "" {
+					t.DotfilesBundle = req.Bundle
+				}
+				t.DotfilesRev = env.Get("dotfiles_rev")
+				t.DotfilesAppliedAt = time.Now().UTC().Format(time.RFC3339)
+				id = t.ID
+				return nil
+			}); errors.Is(err, errNotTarget) {
 				env.Logf("  %s is not a lazylongarm target; nothing recorded", f.Where())
 				return nil
-			}
-			if req.Bundle != "" {
-				t.DotfilesBundle = req.Bundle
-			}
-			t.DotfilesRev = env.Get("dotfiles_rev")
-			t.DotfilesAppliedAt = time.Now().UTC().Format(time.RFC3339)
-			if err := deps.Config.Save(); err != nil {
+			} else if err != nil {
 				return err
 			}
-			env.Logf("  saved dotfiles state on target %q", t.ID)
+			env.Logf("  saved dotfiles state on target %q", id)
 			return nil
 		},
 	})
 	return p, nil
 }
+
+// errNotTarget stops the save-target update for a machine lazylongarm does
+// not manage.
+var errNotTarget = errors.New("not a lazylongarm target")
 
 func answersLabel(req DotfilesRequest, custom, fresh bool) string {
 	switch {

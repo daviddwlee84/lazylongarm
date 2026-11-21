@@ -16,7 +16,7 @@ internal/cloudfw       Azure NSG discovery and rule planning via `az`
 internal/release       GitHub release download + SHA256SUMS verification + cache
 internal/fleet         hub registry ⨝ managed targets; hub status checks
 internal/companion     hc/herdr machine lists via their CLIs; chezmoi state script, bootstrap templates
-internal/config        XDG paths, TOML config with lock + conflict detection
+internal/config        XDG paths, TOML config; locked read-modify-write updates
 internal/secret        redacting wrapper for join codes / TOTP secrets
 ```
 
@@ -46,6 +46,11 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
   stdin form: on a remote machine the wrapper reads it from ssh stdin and puts
   it only on that `longarm join`'s argv. It is single-use and valid 15 min.
 - **XDG everywhere**, including macOS, for lazylongarm's own files.
+- **Config writes are short read-modify-writes.** Commands load the config at
+  startup but record results through `config.Update`: take the lock, re-read
+  the file, change only this operation's entry (one target, one hub), write,
+  release. Overlapping long runs (two `worker add`s) both keep their entries,
+  and a retried step starts from the current file.
 
 ## Companions
 
