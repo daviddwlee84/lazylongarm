@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `user self --panel=false` warns in the review that the user's panel login
+  cannot be added later (the hub refuses an admin's panel login for a user
+  with machines): later devices are then approved at `/link` by an admin
+  login named like the user, and become admins.
+- `peer add` and `user self`, refusing a user who already has a device, say
+  who can approve `longarm login` at `/link` (the user's panel login, or an
+  admin login named like the user via `hub panel-user`), to open `/link` via
+  `hub panel` (the URL login prints fails for a loopback panel), and mention
+  `longarm admin issue --role client --user`.
+- Operating guide: "Later devices" (pairing steps, who may approve, what the
+  device gets).
+
 ## v0.4.0 — 2026-11-22
 
 - `user self|invite|ls|remove`: share your hub with other people. `user self`

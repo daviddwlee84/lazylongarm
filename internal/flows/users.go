@@ -70,7 +70,7 @@ func BuildUserSelf(req SelfRequest, who longarm.WhoAmI, users longarm.UserList, 
 	}
 	existing, exists := users.Find(req.Name)
 	if exists && existing.DeviceCount > 0 {
-		return nil, fmt.Errorf("user %s already has %d device(s), and the hub issues user-bound codes for a user's first device only: sign in with `longarm login` and approve it at /link with %s's panel login, or issue a certificate on the hub host (`longarm admin issue --user %s`)", req.Name, existing.DeviceCount, req.Name, req.Name)
+		return nil, fmt.Errorf("user %s already has %d device(s), and the hub issues user-bound codes for a user's first device only: %s", req.Name, existing.DeviceCount, LaterDeviceHint(req.Name, existing.Panel))
 	}
 	device := req.Device
 	if device == "" {
@@ -91,6 +91,9 @@ func BuildUserSelf(req SelfRequest, who longarm.WhoAmI, users longarm.UserList, 
 	}
 	if req.Panel && !exists {
 		p.Summary = append(p.Summary, [2]string{"panel login", req.Name + ": generated password + TOTP, shown once after apply (approves `longarm login` of your later devices at /link)"})
+	}
+	if !(req.Panel && !exists) && !existing.Panel {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("no panel login for %s, and none can be added once it has a device (the hub refuses an admin's panel login for a user with machines): a later device's `longarm login` must then be approved at /link by an admin panel login named %s (`lazylongarm hub panel-user %s`), and gets an admin certificate. Keep --panel unless that is fine", req.Name, req.Name, req.Name))
 	}
 	if !users.Tenancy {
 		p.Warnings = append(p.Warnings, "this is the hub's first user: it separates users from now on. Fleet workers stay usable by every user; make yours owned (`lazylongarm worker add <host> --reenroll --owner "+req.Name+"`) before inviting anyone")
@@ -315,4 +318,15 @@ func RenderInvite(inv Invite) string {
 		w("User `%s`, password `%s`, TOTP secret `%s` (add it to an authenticator app).", inv.User, inv.Password.Reveal(), inv.TOTP.Reveal())
 	}
 	return b.String()
+}
+
+// LaterDeviceHint says how a machine becomes another device of user, whose
+// first device exists: upstream issues user-bound codes for the first device
+// only, and refuses an admin's panel login for a user with machines.
+func LaterDeviceHint(user string, hasPanel bool) string {
+	approve := fmt.Sprintf("an admin panel login named %s (`lazylongarm hub panel-user %s`, over SSH on the hub host; the approved device gets an admin certificate)", user, user)
+	if hasPanel {
+		approve = user + "'s panel login (a client certificate), or " + approve
+	}
+	return fmt.Sprintf("run `longarm login --no-browser` on that machine and approve its code at the panel's /link page (`lazylongarm hub panel`; the URL longarm login prints is wrong when the panel listens on loopback only) with %s; or issue a client certificate on the hub host (`longarm admin issue --role client --user %s`)", approve, user)
 }

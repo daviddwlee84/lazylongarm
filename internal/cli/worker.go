@@ -203,7 +203,7 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 			cancel()
 			if err == nil {
 				if u, ok := users.Find(f.clientUser); ok {
-					pr.ClientUserDevices = u.DeviceCount
+					pr.ClientUserDevices, pr.ClientUserPanel = u.DeviceCount, u.Panel
 				}
 			}
 		}

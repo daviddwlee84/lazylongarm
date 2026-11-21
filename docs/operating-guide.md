@@ -144,8 +144,8 @@ order of the steps:
   users' owned workers.
 - A user-bound join code works for the user's **first device only**; later
   devices run `longarm login` and are approved at the panel's `/link` page
-  with that user's panel login. (`peer add --client-user U` refuses once `U`
-  has a device and says so.)
+  (see [Later devices](#later-devices)). `peer add --client-user U` refuses
+  once `U` has a device and says so.
 
 | Step | Command | What happens |
 |---|---|---|
@@ -165,6 +165,34 @@ what the hub's operator can see and suggests `[access] owners/users` and
 Programs that loaded the old certificate before step 1 (`longarm mcp` in agent
 sessions, the tray) keep using it; restart them. `status --doctor` warns about
 fleet workers and an admin certificate without a user record.
+
+### Later devices
+
+Once a user has a device, a new machine of theirs signs in itself and is
+approved in a browser (upstream's pairing, like an OAuth device code):
+
+1. On the machine: `longarm login --no-browser`. It prints a `/link` URL and
+   an 8-character code, and waits up to 10 minutes.
+2. Open the panel from a machine that reaches it (`lazylongarm hub panel`)
+   and go to `/link` there: the URL `longarm login` prints is the gRPC host
+   with the panel's port, which does not answer when the panel listens on
+   loopback only (unless the hub sets `public_url`).
+3. Sign in, type the code, check the host name and node key, approve. A
+   certificate this machine already had for another user is removed.
+
+Who may approve, on a hub without an identity provider:
+
+| Panel login | How it is made | The device gets |
+|---|---|---|
+| the user's own (role user) | `admin user add U --panel`, or `user self U` / `user invite U --panel`, **only while `U` has no machine**: afterwards the hub refuses an admin's panel login for `U` | a client certificate |
+| an admin login named `U` | `lazylongarm hub panel-user U` (`longarm-hub user add` on the hub host over SSH; the panel's own form refuses a user's name) | an **admin** certificate of `U` |
+
+So keep `--panel` on `user self` unless your later devices may be admins.
+An admin panel login that is not named like a user (the one `hub setup`
+suggests) acts as a user of its own name: once users are separated it sees
+none of your machines on the Nodes page. Without any panel, `longarm admin
+issue --role client --user U` on the hub host signs a client bundle to copy
+over (the key is made there, not on the device).
 
 Sharing stays off: an admin allows it per user (`longarm admin user set
 alice --can-share`) and the owner shares one worker (`longarm worker share

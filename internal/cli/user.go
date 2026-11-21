@@ -112,7 +112,10 @@ func userSelfCommand(o *options) *cobra.Command {
 admin join code for this machine and enrolls this machine's longarm with it
 (the old certificate is backed up first). With --panel (default) it also
 creates a web panel login, shown once, which approves ` + "`longarm login`" + ` of
-your later devices at the panel's /link page.
+your later devices at the panel's /link page. This is the only chance: the
+hub refuses an admin's panel login for a user who has machines. Without one,
+a later device is approved by an admin panel login named like the user
+(` + "`lazylongarm hub panel-user <user>`" + `) and gets an admin certificate.
 
 Afterwards make your workers owned (` + "`lazylongarm worker add <host> --reenroll --owner <user>`" + `)
 and remove the old certificate's user (` + "`lazylongarm user remove <old>`" + `, without --purge).`,
@@ -196,7 +199,7 @@ and remove the old certificate's user (` + "`lazylongarm user remove <old>`" + `
 	}
 	c.Flags().StringVar(&hubID, "hub", "", "hub id (default: the default hub)")
 	c.Flags().StringVar(&req.Device, "device", "", "node name of this machine's new certificate (default: the user name)")
-	c.Flags().BoolVar(&req.Panel, "panel", true, "also create a web panel login (approves your later devices at /link)")
+	c.Flags().BoolVar(&req.Panel, "panel", true, "also create a web panel login (approves your later devices at /link; it cannot be added later)")
 	ao.bind(c)
 	return c
 }
