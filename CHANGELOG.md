@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 — 2026-11-21
 
 - `hub panel` and the dashboard's `p` open a tailnet panel URL only when this
   machine's Tailscale is connected to that tailnet (`tailscale status --json`;
