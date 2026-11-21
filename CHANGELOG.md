@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.1 — 2026-11-21
 
 - `worker add` no longer reports "already enrolled" for a worker that joined
   but never collected its certificate (only `tls/pending.key`). It says so,
