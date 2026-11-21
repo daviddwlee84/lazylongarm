@@ -74,6 +74,15 @@ func Merge(cfg *config.Config, nodes []longarm.Node) []Row {
 		if n.Metrics != nil {
 			r.CPU, r.Mem = n.Metrics.CPUPercent, n.MemPercent()
 		}
+		// A re-enrolled machine is listed twice: its revoked old node and
+		// the new one. Show one row per name, the live node when there is one.
+		if old, ok := byName[n.Name]; ok {
+			if n.State == "revoked" || old.State != "revoked" {
+				continue
+			}
+			byName[n.Name] = r
+			continue
+		}
 		byName[n.Name] = r
 		order = append(order, n.Name)
 	}

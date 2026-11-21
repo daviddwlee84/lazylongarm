@@ -18,6 +18,8 @@
   the new certificate (it previously kept the old identity until a restart).
 - `worker add` on a machine lazylongarm already manages keeps its saved
   service mode (`system`/`user`) unless `--service` is given.
+- `worker ls` and the dashboard show one row per re-enrolled machine (its
+  live node; the hub also lists the revoked old one).
 - `worker ls` has an OWNER column (`fleet` for workers without one);
   `status` shows the user on hubs that separate users, and `status --doctor`
   warns about fleet workers and an admin certificate without a user record.

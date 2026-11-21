@@ -39,3 +39,18 @@ func TestRowLabelTextSkipsPlatform(t *testing.T) {
 		t.Fatal("empty labels")
 	}
 }
+
+func TestMergeShowsTheLiveNodeOfAReenrolledMachine(t *testing.T) {
+	for _, nodes := range [][]longarm.Node{
+		{{ID: "new", Name: "w1", State: "approved", Online: true, Owner: "alice"}, {ID: "old", Name: "w1", State: "revoked"}},
+		{{ID: "old", Name: "w1", State: "revoked"}, {ID: "new", Name: "w1", State: "approved", Online: true, Owner: "alice"}},
+	} {
+		rows := Merge(nil, nodes)
+		if len(rows) != 1 || rows[0].State != "online" || rows[0].Owner != "alice" {
+			t.Fatalf("rows %+v", rows)
+		}
+	}
+	if rows := Merge(nil, []longarm.Node{{Name: "gone", State: "revoked"}}); len(rows) != 1 || rows[0].State != "revoked" {
+		t.Fatalf("a revoked-only node: %+v", rows)
+	}
+}
