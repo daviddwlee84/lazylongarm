@@ -95,6 +95,14 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 		if f.req.Version == "" {
 			f.req.Version = hub.Version
 		}
+		if !cmd.Flags().Changed("service") {
+			// A machine lazylongarm already manages keeps its service mode:
+			// re-enrolling a user-mode daemon as a system service would end
+			// the daemon and then need sudo to install a unit.
+			if t, ok := knownTarget(o.cfg, f.req.Host, f.local); ok && t.Service != "" {
+				f.req.Service = t.Service
+			}
+		}
 		bare := f.req.Host == "" && !f.local
 		if f.interactive || bare {
 			if !o.interactive(cmd) {
@@ -202,6 +210,18 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 		return flows.BuildPeerAdd(pr, facts, deps)
 	}
 	return flows.BuildWorkerAdd(req, facts, deps)
+}
+
+// knownTarget is the saved target of this SSH host (or of this machine).
+func knownTarget(cfg *config.Config, host string, local bool) (config.Target, bool) {
+	for _, t := range cfg.Targets {
+		if (host != "" && t.SSHHost == host) || (local && host == "" && t.SSHHost == "") {
+			if t.Service == flows.ServiceSystem || t.Service == flows.ServiceUser {
+				return t, true
+			}
+		}
+	}
+	return config.Target{}, false
 }
 
 // resolveOwnerAndReplace finds, for --reenroll, the node the machine

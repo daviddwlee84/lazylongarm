@@ -16,6 +16,8 @@
   the new code, keeps its labels and its owner (an owned worker never becomes
   a fleet worker by accident), and restarts the service so longarmd loads
   the new certificate (it previously kept the old identity until a restart).
+- `worker add` on a machine lazylongarm already manages keeps its saved
+  service mode (`system`/`user`) unless `--service` is given.
 - `worker ls` has an OWNER column (`fleet` for workers without one);
   `status` shows the user on hubs that separate users, and `status --doctor`
   warns about fleet workers and an admin certificate without a user record.

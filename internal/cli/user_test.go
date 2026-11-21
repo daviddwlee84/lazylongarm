@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daviddwlee84/lazylongarm/internal/config"
 	"github.com/daviddwlee84/lazylongarm/internal/flows"
 	"github.com/daviddwlee84/lazylongarm/internal/hostprobe"
 )
@@ -185,5 +186,25 @@ func TestReenrollFindsNodeByDefaultName(t *testing.T) {
 	}
 	if !strings.Contains(out, "longarm admin revoke "+name) {
 		t.Fatalf("no revoke of %s in the plan:\n%s", name, out)
+	}
+}
+
+func TestKnownTargetKeepsServiceMode(t *testing.T) {
+	cfg := &config.Config{Targets: []config.Target{
+		{ID: "nas", SSHHost: "nas-alias", Service: "user"},
+		{ID: "here", Service: "system"},
+		{ID: "odd", SSHHost: "odd", Service: "none"},
+	}}
+	if tg, ok := knownTarget(cfg, "nas-alias", false); !ok || tg.Service != "user" {
+		t.Fatalf("nas: %+v %v", tg, ok)
+	}
+	if tg, ok := knownTarget(cfg, "", true); !ok || tg.ID != "here" {
+		t.Fatalf("local: %+v %v", tg, ok)
+	}
+	if _, ok := knownTarget(cfg, "odd", false); ok {
+		t.Fatal("a target without a usable service mode")
+	}
+	if _, ok := knownTarget(cfg, "new-box", false); ok {
+		t.Fatal("unknown host matched")
 	}
 }
