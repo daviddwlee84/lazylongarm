@@ -761,9 +761,9 @@ func (m *Model) panelLine(h *config.Hub) (string, string) {
 		return t.OK.Render("● " + u), t.Muted.Render("tunnel open · p closes · y copies the URL")
 	}
 	if u := h.PanelURL(); u != "" {
-		return t.OK.Render(u), t.Muted.Render(h.PanelMode() + " · p opens · A changes access · U adds a login")
+		return t.OK.Render(u), t.Muted.Render(h.PanelMode() + " · p opens it · A changes access")
 	}
-	return dash(h.Panel), t.Muted.Render("p opens a tunnel + browser · A panel access · U adds a login")
+	return dash(h.Panel), t.Muted.Render("p opens a tunnel + browser · U adds a login")
 }
 
 func (m *Model) helpLines() []string {
