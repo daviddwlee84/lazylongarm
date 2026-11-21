@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 — 2026-11-22
 
 - `user self --panel=false` warns in the review that the user's panel login
   cannot be added later (the hub refuses an admin's panel login for a user
