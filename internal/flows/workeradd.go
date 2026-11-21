@@ -226,7 +226,11 @@ func BuildWorkerAdd(req WorkerRequest, f *hostprobe.Facts, deps WorkerDeps) (*pl
 		p.Warnings = append(p.Warnings, "the service restarts to pick up the new certificate: jobs keep running, sessions and forwards through it reconnect")
 	}
 	if req.Service == ServiceSystem && f.Sudo == "password" {
-		p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: the service step hands the terminal to sudo")
+		if req.Reenroll {
+			p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: needed only if longarmd does not come back by itself (then the service step hands the terminal to sudo)")
+		} else {
+			p.Warnings = append(p.Warnings, "sudo on "+f.Where()+" asks for a password: the service step hands the terminal to sudo")
+		}
 	}
 	if f.OS == "darwin" {
 		p.Warnings = append(p.Warnings, "macOS workers run jobs as "+f.User+" (no per-user isolation on macOS)")

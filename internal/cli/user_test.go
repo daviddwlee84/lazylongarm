@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/daviddwlee84/lazylongarm/internal/flows"
+	"github.com/daviddwlee84/lazylongarm/internal/hostprobe"
 )
 
 // fakeHubLongarm puts a fake longarm on PATH that answers like an admin
@@ -162,5 +165,25 @@ func TestReenrollKeepsOwner(t *testing.T) {
 	}
 	if strings.Contains(out, "every user of the hub may use it") {
 		t.Fatalf("re-enroll made an owned worker a fleet worker:\n%s", out)
+	}
+}
+
+// Without --name the default name (here: this machine's hostname) must be
+// known before looking up the node a --reenroll replaces; otherwise the old
+// node is not revoked and the join fails on the taken name.
+func TestReenrollFindsNodeByDefaultName(t *testing.T) {
+	cfg, _ := fakeHubLongarm(t)
+	facts, err := hostprobe.Probe(context.Background(), "")
+	if err != nil {
+		t.Skipf("local probe: %v", err)
+	}
+	name := flows.WorkerDefaults(flows.WorkerRequest{}, facts).Name
+	t.Setenv("FAKE_WORKERS", fmt.Sprintf(`{"nodes":[{"id":"dddd4444eeee","name":%q,"role":"worker","state":"approved"}]}`, name))
+	code, out, errOut := runWith(t, cfg, fakeTools(""), "worker", "add", "--local", "--service", "user", "--reenroll", "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if !strings.Contains(out, "longarm admin revoke "+name) {
+		t.Fatalf("no revoke of %s in the plan:\n%s", name, out)
 	}
 }

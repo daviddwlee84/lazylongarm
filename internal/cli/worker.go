@@ -167,6 +167,11 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 			req.Mint = flows.MintAdmin
 		}
 	}
+	if req.Name == "" {
+		// The default name (SSH alias / hostname) is needed to find the
+		// node a --reenroll replaces.
+		req.Name = flows.WorkerDefaults(flows.WorkerRequest{Host: req.Host}, facts).Name
+	}
 	if err := resolveOwnerAndReplace(ctx, client, who, &req); err != nil {
 		return nil, err
 	}
