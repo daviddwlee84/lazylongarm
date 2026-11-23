@@ -21,6 +21,7 @@ type fakeColab struct {
 	execs    []string
 	uploads  map[string]string // remote path -> content at upload time
 	failJoin bool
+	failDown bool // the VM cannot reach GitHub
 }
 
 func (f *fakeColab) Usage(context.Context) (colab.Usage, error) {
@@ -54,6 +55,12 @@ func (f *fakeColab) Exec(_ context.Context, name, src string, _ time.Duration) (
 	switch {
 	case strings.Contains(src, "platform.machine()"):
 		return ok("x86_64 -")
+	case strings.Contains(src, "urlopen"):
+		f.calls = append(f.calls, "download")
+		if f.failDown {
+			return "urllib.error.URLError: <urlopen error timed out>\n", nil
+		}
+		return ok("downloaded 6")
 	case strings.Contains(src, "os.replace(part, b)"):
 		return ok("installed")
 	case strings.Contains(src, `"enrolled" if ok`):
@@ -83,7 +90,8 @@ func colabFixture(t *testing.T) (ColabWorkerRequest, ColabDeps, *fakeClient, *fa
 	cc := &fakeColab{}
 	deps := ColabDeps{
 		Client: client, Colab: cc, PollInterval: time.Millisecond, WaitTimeout: time.Second,
-		Fetch: func(context.Context, string, string, func(string, ...any)) (string, error) { return bin, nil },
+		Fetch:    func(context.Context, string, string, func(string, ...any)) (string, error) { return bin, nil },
+		Checksum: func(context.Context, string, string) (string, error) { return strings.Repeat("ab", 32), nil },
 	}
 	req := ColabWorkerRequest{Name: "colab-1", GPU: "T4", Hub: hub, Version: "v0.1.42", Usage: colab.Usage{Balance: 10}, Labels: []string{"pool=ml", "provider=evil"}}
 	return req, deps, client, cc
@@ -108,7 +116,7 @@ func TestColabWorkerAddRunsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%v", err, results)
 	}
-	if got := strings.Join(cc.calls, "; "); got != "new colab-1 T4; upload /content/longarm/bin/longarmd.part; upload /content/longarm/.join-code" {
+	if got := strings.Join(cc.calls, "; "); got != "new colab-1 T4; download; upload /content/longarm/.join-code" {
 		t.Fatalf("colab calls: %s", got)
 	}
 	if cc.uploads["/content/longarm/.join-code"] != "C0DE-1" {
@@ -186,5 +194,44 @@ func TestColabRemove(t *testing.T) {
 func TestDefaultColabName(t *testing.T) {
 	if got := DefaultColabName(time.Date(2026, 11, 23, 9, 5, 0, 0, time.Local)); got != "colab-1123-0905" || !workerNameRE.MatchString(got) {
 		t.Fatal(got)
+	}
+}
+
+func TestColabBinaryFetchModes(t *testing.T) {
+	cases := []struct {
+		fetch    string
+		failDown bool
+		want     string
+		fail     bool
+	}{
+		{FetchAuto, false, "download", false},
+		{FetchAuto, true, "download; upload /content/longarm/bin/longarmd.part", false},
+		{FetchRemote, true, "download", true},
+		{FetchPush, false, "upload /content/longarm/bin/longarmd.part", false},
+	}
+	for _, c := range cases {
+		req, deps, _, cc := colabFixture(t)
+		req.Fetch = c.fetch
+		cc.failDown = c.failDown
+		cc.sessions = []colab.Session{{Name: req.Name}}
+		p, err := BuildColabWorkerAdd(req, deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var step plan.Step
+		for _, s := range p.Steps {
+			if s.ID == "binary" {
+				step = s
+			}
+		}
+		err = step.Apply(context.Background(), plan.NewEnv())
+		if got := strings.Join(cc.calls, "; "); got != c.want || (err != nil) != c.fail {
+			t.Errorf("%s failDown=%v: calls %q err %v", c.fetch, c.failDown, got, err)
+		}
+	}
+	req, deps, _, _ := colabFixture(t)
+	req.Fetch = "bogus"
+	if _, err := BuildColabWorkerAdd(req, deps); err == nil {
+		t.Error("bogus fetch mode accepted")
 	}
 }

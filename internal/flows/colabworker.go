@@ -43,9 +43,13 @@ var _ Colab = (*colab.Client)(nil)
 
 // ColabWorkerRequest describes `worker colab add`.
 type ColabWorkerRequest struct {
-	Name    string   // worker and session name
-	GPU     string   // "" = CPU runtime; T4, L4, A100, ...
-	HighMem bool     // high-RAM shape
+	Name    string // worker and session name
+	GPU     string // "" = CPU runtime; T4, L4, A100, ...
+	HighMem bool   // high-RAM shape
+	// Fetch is how longarmd reaches the VM: FetchAuto (default: the VM
+	// downloads it from GitHub, checked against SHA256SUMS fetched here;
+	// upload on failure), FetchRemote (no fallback) or FetchPush (upload).
+	Fetch   string
 	Labels  []string // KEY=VALUE, besides provider=colab and gpu=
 	Hub     *config.Hub
 	Version string      // longarmd release tag
@@ -99,6 +103,9 @@ func ValidateColabWorker(req ColabWorkerRequest) error {
 			problems = append(problems, fmt.Sprintf("label %q must be KEY=VALUE", l))
 		}
 	}
+	if req.Fetch != "" && !validFetch(req.Fetch) {
+		problems = append(problems, fmt.Sprintf("fetch %q must be auto, push or remote", req.Fetch))
+	}
 	if req.Usage.Balance <= 0 {
 		// Colab FAQ: remote control (SSH-like shells) and distributed
 		// computing workers are disallowed on runtimes "running free of
@@ -115,6 +122,9 @@ func ValidateColabWorker(req ColabWorkerRequest) error {
 func BuildColabWorkerAdd(req ColabWorkerRequest, deps ColabDeps) (*plan.Plan, error) {
 	if err := ValidateColabWorker(req); err != nil {
 		return nil, err
+	}
+	if req.Fetch == "" {
+		req.Fetch = FetchAuto
 	}
 	if deps.PollInterval == 0 {
 		deps.PollInterval = 3 * time.Second
@@ -144,7 +154,7 @@ func BuildColabWorkerAdd(req ColabWorkerRequest, deps ColabDeps) (*plan.Plan, er
 			{"compute units", fmt.Sprintf("balance %.2f, now burning %.2f/hr across %d VM(s)", req.Usage.Balance, req.Usage.RatePerHour, req.Usage.Active)},
 			{"worker name", name},
 			{"hub", hub.Address + " (" + hub.ID + ")"},
-			{"binary", fmt.Sprintf("longarmd %s, verified here against SHA256SUMS, uploaded to %s", orLatest(tag), bin)},
+			{"binary", fmt.Sprintf("longarmd %s → %s; %s", orLatest(tag), bin, colabFetchSummary(req.Fetch))},
 			{"daemon", "background `longarmd run` on the VM (no service; ends with the VM)"},
 			{"reachable", "via the hub relay (outbound only)"},
 			{"ownership", "your own worker: only you can run jobs on it"},
@@ -217,11 +227,8 @@ func BuildColabWorkerAdd(req ColabWorkerRequest, deps ColabDeps) (*plan.Plan, er
 		return f[1], nil
 	}
 	p.Steps = append(p.Steps, plan.Step{
-		ID: "binary", Title: "Upload a verified longarmd to the VM", Idempotent: true,
-		Actions: []plan.Action{
-			{Where: "local", Display: "download longarmd-linux-<arch> " + orLatest(tag) + " from GitHub, check it against SHA256SUMS"},
-			{Where: where, Display: "colab upload → " + bin + " (sha256 checked again on the VM)"},
-		},
+		ID: "binary", Title: "Install a verified longarmd on the VM", Idempotent: true,
+		Actions: colabBinaryActions(req.Fetch, tag, bin, where),
 		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
 			have, err := probe(ctx, env)
 			if err != nil || have == "-" || deps.Checksum == nil {
@@ -238,6 +245,29 @@ func BuildColabWorkerAdd(req ColabWorkerRequest, deps ColabDeps) (*plan.Plan, er
 				if _, err := probe(ctx, env); err != nil {
 					return err
 				}
+			}
+			if req.Fetch != FetchPush {
+				err := func() error {
+					if deps.Checksum == nil {
+						return errors.New("no SHA256SUMS lookup")
+					}
+					want, err := deps.Checksum(ctx, tag, asset)
+					if err != nil {
+						return err
+					}
+					if _, err := remote(ctx, env, "download", pyDownload(release.AssetURL(tag, asset), bin, want)); err != nil {
+						return err
+					}
+					env.Logf("  the VM downloaded %s (%s) from GitHub, sha256 %s… matches SHA256SUMS", asset, orLatest(tag), want[:12])
+					return nil
+				}()
+				if err == nil {
+					return nil
+				}
+				if req.Fetch == FetchRemote {
+					return err
+				}
+				env.Logf("  ! the VM could not download it from GitHub (%v); uploading it from here instead", firstLine(err.Error()))
 			}
 			local, err := deps.Fetch(ctx, tag, asset, env.Logf)
 			if err != nil {
@@ -451,6 +481,35 @@ func hasLabel(m map[string]string, kv string) bool {
 	return m[k] == v
 }
 
+func colabFetchSummary(mode string) string {
+	switch mode {
+	case FetchPush:
+		return "push: downloaded and verified here, then colab upload (sha256 checked again on the VM)"
+	case FetchRemote:
+		return "remote: the VM downloads it from GitHub, checked against SHA256SUMS fetched here; no fallback"
+	}
+	return "auto: the VM downloads it from GitHub, checked against SHA256SUMS fetched here; if that fails, colab upload from here"
+}
+
+func colabBinaryActions(mode, tag, bin, where string) []plan.Action {
+	sums := plan.Action{Where: "local", Display: "fetch SHA256SUMS of " + orLatest(tag) + " from GitHub"}
+	download := plan.Action{Where: where, Display: "download longarmd-linux-<arch> from GitHub → " + bin + " (sha256 must match)"}
+	upload := plan.Action{Where: "local", Display: "download + verify longarmd-linux-<arch> here, colab upload → " + bin + " (sha256 checked again on the VM)"}
+	switch mode {
+	case FetchPush:
+		return []plan.Action{upload}
+	case FetchRemote:
+		return []plan.Action{sums, download}
+	}
+	upload.Display = "if that fails: " + upload.Display
+	return []plan.Action{sums, download, upload}
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
 func colabNewDisplay(req ColabWorkerRequest) string {
 	s := "colab new -s " + req.Name
 	if req.GPU != "" {
@@ -492,6 +551,32 @@ if os.path.exists(b):
             h.update(chunk)
     sha = h.hexdigest()
 print(` + py(colab.Marker) + `, platform.machine(), sha)
+`
+}
+
+// pyDownload fetches url into bin on the VM (Google's network: about a
+// second for longarmd, against ~20 s for colab upload) and installs it only
+// when its sha256 matches.
+func pyDownload(url, bin, sha string) string {
+	return `import hashlib, os, urllib.request
+part, b = ` + py(bin+".part") + `, ` + py(bin) + `
+h, n = hashlib.sha256(), 0
+with urllib.request.urlopen(` + py(url) + `, timeout=30) as r, open(part, "wb") as f:
+    while True:
+        chunk = r.read(1 << 20)
+        if not chunk:
+            break
+        n += len(chunk)
+        if n > 200 << 20:
+            raise SystemExit("download larger than 200 MiB")
+        h.update(chunk)
+        f.write(chunk)
+if h.hexdigest() != ` + py(sha) + `:
+    os.remove(part)
+    raise SystemExit("sha256 mismatch: " + h.hexdigest())
+os.chmod(part, 0o755)
+os.replace(part, b)
+print(` + py(colab.Marker) + `, "downloaded", n)
 `
 }
 
