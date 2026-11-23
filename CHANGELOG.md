@@ -3,8 +3,9 @@
 ## Unreleased
 
 - `worker colab add|ls|rm`: borrow a Google Colab VM as a temporary worker
-  owned by you, through the Colab CLI. `add` creates the session, uploads a
-  verified longarmd (sha256 checked here and on the VM), enrolls it with a
+  owned by you, through the Colab CLI. `add` creates the session, installs
+  longarmd (the VM downloads it from GitHub and it must match SHA256SUMS
+  fetched here; `--fetch push` uploads a copy verified here), enrolls it with a
   15-minute owner code passed as a file (never in an exec'd cell), starts
   `longarmd run` in the background and waits until it is online; it refuses
   without a positive compute-unit balance (Colab's terms for remote shells

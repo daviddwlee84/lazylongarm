@@ -226,9 +226,12 @@ run.
 through the Colab CLI (`uv tool install google-colab-cli`, signed in once):
 
 1. `colab new -s <name>` (CPU by default; `--gpu T4|L4|A100|...`, `--high-mem`).
-2. Downloads `longarmd-linux-<arch>` here, checks it against SHA256SUMS,
-   `colab upload`s it to `/content/longarm/bin` and checks the sha256 again
-   on the VM.
+2. Installs `longarmd-linux-<arch>` in `/content/longarm/bin`. With
+   `--fetch auto` (default) the VM downloads it from GitHub (about a second
+   on Google's network) and keeps it only if it matches the release's
+   SHA256SUMS fetched here; if that fails, this machine downloads and
+   verifies it and `colab upload`s it (about 20 s; sha256 checked again on
+   the VM). `--fetch remote` has no fallback, `--fetch push` always uploads.
 3. Mints a 15-minute owner code (`longarm worker add`) and uploads it as a
    file that the VM reads and deletes before `longarmd join`: an exec'd cell
    and its `--env` values stay in the session's execution log, a file does not.

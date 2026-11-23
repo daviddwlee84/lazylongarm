@@ -68,8 +68,9 @@ func workerColabAddCommand(o *options) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "add [name]",
 		Short: "Create a Colab VM and enroll it as a worker owned by you",
-		Long: `Create a Colab session (CPU by default, --gpu for an accelerator), upload
-longarmd (downloaded here and checked against the release's SHA256SUMS),
+		Long: `Create a Colab session (CPU by default, --gpu for an accelerator), install
+longarmd (the VM downloads it from GitHub and it must match the release's
+SHA256SUMS fetched here; --fetch push uploads a copy verified here instead),
 enroll it with a one-time owner code (uploaded as a file, never on a command
 line or in the session's execution log), start ` + "`longarmd run`" + ` in the
 background and wait until the hub reports the worker online.
@@ -150,6 +151,7 @@ the steps already in place.`,
 	fl := c.Flags()
 	fl.StringVar(&req.GPU, "gpu", "", "accelerator: T4, L4, G4, H100, A100 (availability depends on your plan; default: a CPU runtime)")
 	fl.BoolVar(&req.HighMem, "high-mem", false, "high-RAM machine shape (paid plans)")
+	fl.StringVar(&req.Fetch, "fetch", flows.FetchAuto, "how longarmd reaches the VM: auto (the VM downloads it from GitHub, checked against SHA256SUMS fetched here; else upload) | remote (download, no fallback) | push (download here, colab upload)")
 	fl.StringArrayVar(&req.Labels, "label", nil, "extra worker label KEY=VALUE (repeatable; provider=colab and gpu= are set for you)")
 	fl.StringVar(&hubID, "hub", "", "hub id (default: the default hub)")
 	fl.StringVar(&req.Version, "longarm-version", "", "Longarm release tag to install (default: the hub's recorded version, else latest)")
