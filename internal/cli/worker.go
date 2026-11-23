@@ -23,7 +23,7 @@ import (
 
 func workerCommand(o *options) *cobra.Command {
 	c := &cobra.Command{Use: "worker", Short: "Bootstrap and list Longarm workers", Args: cobra.ArbitraryArgs, RunE: groupHelp}
-	c.AddCommand(workerAddCommand(o), workerListCommand(o))
+	c.AddCommand(workerAddCommand(o), workerListCommand(o), workerColabCommand(o))
 	return c
 }
 

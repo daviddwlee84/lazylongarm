@@ -1,6 +1,11 @@
 # Ephemeral cloud workers
 
-Status: idea. Priority P3.
+Status: idea. Priority P3. Colab shipped as `worker colab add|ls|rm`
+(internal/flows/colabworker.go): session named after the worker, verified
+binary upload, owner code as a file, background `longarmd run`,
+`provider=colab` label as the guard for `rm`. Other providers can follow
+that shape; the gaps below (no worker TTL, no way to keep auto-placed jobs
+off a disposable worker) still apply.
 
 Longarm supports the pieces: `install.sh --no-service`/foreground `longarmd run`,
 `LONGARM_DATA_DIR`, non-interactive `longarmd join`, `longarmd leave`. Missing:

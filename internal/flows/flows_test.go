@@ -144,6 +144,10 @@ func (f *fakeClient) Workers(context.Context) (longarm.WorkerList, error) {
 func (f *fakeClient) WorkerAdd(context.Context, string, time.Duration, []string) (secret.Secret, error) {
 	return f.code, nil
 }
+func (f *fakeClient) WorkerRemove(_ context.Context, name string) error {
+	f.calls = append(f.calls, "worker remove "+name)
+	return nil
+}
 func (f *fakeClient) AdminJoinCode(_ context.Context, req longarm.JoinCodeRequest) (secret.Secret, error) {
 	f.joinCodes = append(f.joinCodes, req)
 	f.calls = append(f.calls, "join-code "+req.Name)

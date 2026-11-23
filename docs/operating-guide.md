@@ -220,6 +220,44 @@ run.
   review warns, and louder when the account is root-equivalent. Revoke with
   `longarm admin revoke <worker>-client`.
 
+## Colab workers
+
+`worker colab add [name]` borrows a Google Colab VM as a temporary worker
+through the Colab CLI (`uv tool install google-colab-cli`, signed in once):
+
+1. `colab new -s <name>` (CPU by default; `--gpu T4|L4|A100|...`, `--high-mem`).
+2. Downloads `longarmd-linux-<arch>` here, checks it against SHA256SUMS,
+   `colab upload`s it to `/content/longarm/bin` and checks the sha256 again
+   on the VM.
+3. Mints a 15-minute owner code (`longarm worker add`) and uploads it as a
+   file that the VM reads and deletes before `longarmd join`: an exec'd cell
+   and its `--env` values stay in the session's execution log, a file does not.
+4. Starts `longarmd run` in the background (no service: it ends with the VM)
+   and waits until the hub reports it online; it reaches the hub through the
+   relay (outbound only).
+
+The worker is yours only and is labeled `provider=colab` (plus
+`gpu=<model>`), so `longarm run --require provider=colab` or `--on <name>`
+targets it. The session has the worker's name. `worker colab ls` joins your
+Colab sessions with `provider=colab` workers and shows the compute-unit
+balance; `worker colab rm <name>` revokes the worker and stops the VM (either
+half may already be gone) and refuses workers without the label.
+
+- **Plan terms.** Colab allows remote shells and distributed-computing
+  workers only on runtimes with a positive compute-unit balance (a paid plan;
+  Google AI plans include one), so `add` refuses without one. Using a runtime
+  as a proxy is forbidden on every plan: forward only to your own debugging
+  ports.
+- **Lifetime.** The VM bills until you remove it. Colab reclaims VMs (at
+  most about 12 hours; idle runtimes sooner, and `colab status` shows a VM
+  running only longarmd as IDLE): jobs running then are lost with their
+  output, and the hub keeps an offline worker until `rm`. Copy results off
+  first.
+- **Placement.** Longarm has no way to keep auto-placed jobs off a worker:
+  while a Colab worker exists, `longarm run` without a worker may land on it.
+- **Revoked names** stay in `longarm ls` as `revoked` (the hub keeps the
+  history); the name can be used again.
+
 ## Dashboard
 
 | Tab | Shows | Actions |

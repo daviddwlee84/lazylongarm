@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `worker colab add|ls|rm`: borrow a Google Colab VM as a temporary worker
+  owned by you, through the Colab CLI. `add` creates the session, uploads a
+  verified longarmd (sha256 checked here and on the VM), enrolls it with a
+  15-minute owner code passed as a file (never in an exec'd cell), starts
+  `longarmd run` in the background and waits until it is online; it refuses
+  without a positive compute-unit balance (Colab's terms for remote shells
+  and workers). Workers are labeled `provider=colab` (+ `gpu=`); `rm` revokes
+  the worker and stops the VM, and refuses workers without that label.
+
 ## v0.4.1 — 2026-11-22
 
 - `user self --panel=false` warns in the review that the user's panel login
