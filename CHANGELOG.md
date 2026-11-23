@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.4.2 — 2026-11-23
 
+- Shell completion completes SSH hosts from `~/.ssh/config` (`worker add`,
+  `peer add`, `hub setup --host`), hub ids (`--hub`), fleet machines and
+  worker names (`companion remotes|ssh-config|dotfiles`) and fixed flag
+  values; commands and flags that take no path no longer offer file names.
+- Homebrew: `brew install daviddwlee84/tap/lazylongarm` (installs bash/zsh/fish
+  completion); README documents completion setup for other installs.
 - `worker colab add|ls|rm`: borrow a Google Colab VM as a temporary worker
   owned by you, through the Colab CLI. `add` creates the session, installs
   longarmd (the VM downloads it from GitHub and it must match SHA256SUMS
