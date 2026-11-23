@@ -22,6 +22,9 @@ macOS and Linux, amd64 and arm64 (lazylongarm drives the local `sh` and
 OpenSSH, so Windows is not supported).
 
 ```sh
+# Homebrew (macOS, Linux): installs bash/zsh completion too
+brew install daviddwlee84/tap/lazylongarm
+
 # Go 1.25+ (installs into $GOBIN, or $(go env GOPATH)/bin)
 go install github.com/daviddwlee84/lazylongarm/cmd/lazylongarm@latest
 
@@ -32,8 +35,23 @@ tar -xzf lazylongarm_*_$(uname -s | tr A-Z a-z)_*.tar.gz lazylongarm && install 
 lazylongarm upgrade --check     # later: lazylongarm upgrade
 ```
 
-Shell completion: `lazylongarm completion zsh|bash|fish` (archives ship them
-under `completions/`). Homebrew is planned.
+**Shell completion** completes commands, flags, SSH hosts from `~/.ssh/config`
+(`worker add <TAB>`), hub ids (`--hub <TAB>`) and fleet machines
+(`companion dotfiles <TAB>`). Homebrew sets it up; with `go install` or an
+archive (which ships the scripts under `completions/`), install it once:
+
+```sh
+# zsh: any directory on $fpath, added before compinit (oh-my-zsh: before it is sourced)
+mkdir -p ~/.zfunc && lazylongarm completion zsh > ~/.zfunc/_lazylongarm
+#   in ~/.zshrc:  fpath+=~/.zfunc
+# bash (needs bash-completion)
+mkdir -p ~/.local/share/bash-completion/completions
+lazylongarm completion bash > ~/.local/share/bash-completion/completions/lazylongarm
+# fish
+lazylongarm completion fish > ~/.config/fish/completions/lazylongarm.fish
+```
+
+Regenerate after `lazylongarm upgrade` to pick up new commands.
 
 **Requirements**: an OpenSSH client and key-based access to the machines you
 manage; for `hub setup`, a Debian/Ubuntu host with systemd and `sudo`; the

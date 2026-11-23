@@ -431,6 +431,10 @@ so reruns are safe.`,
 	c.Flags().StringVar(&include, "include", "", "with --transport longarm: how the aliases reach ssh, as in `companion ssh-config` (auto, yes, no)")
 	c.Flags().StringVar(&hubID, "hub", "", "hub whose Longarm client config to use (default: the default hub)")
 	ao.bind(c)
+	c.ValidArgsFunction = o.completeMachines(false)
+	_ = c.RegisterFlagCompletionFunc("transport", cobra.FixedCompletions([]cobra.Completion{flows.TransportSSH, flows.TransportLongarm}, cobra.ShellCompDirectiveNoFileComp))
+	_ = c.RegisterFlagCompletionFunc("tool", cobra.FixedCompletions([]cobra.Completion{companion.HC, companion.Herdr}, cobra.ShellCompDirectiveNoFileComp))
+	_ = c.RegisterFlagCompletionFunc("include", cobra.FixedCompletions([]cobra.Completion{"auto", "yes", "no"}, cobra.ShellCompDirectiveNoFileComp))
 	return c
 }
 
@@ -578,6 +582,8 @@ names; --all is every remote target.`,
 	c.Flags().StringVar(&include, "include", "", "how the file reaches ssh: auto (edit ~/.ssh/config unless chezmoi manages it), yes, no (default: [companions.ssh] include, else auto)")
 	c.Flags().StringVar(&hubID, "hub", "", "hub whose Longarm client config to use (default: the default hub)")
 	ao.bind(c)
+	c.ValidArgsFunction = o.completeMachines(true)
+	_ = c.RegisterFlagCompletionFunc("include", cobra.FixedCompletions([]cobra.Completion{"auto", "yes", "no"}, cobra.ShellCompDirectiveNoFileComp))
 	return c
 }
 
@@ -682,6 +688,7 @@ one with dotfiles from another repository is refused, never replaced.`,
 	fl.BoolVar(&f.update, "update", false, "pull and apply on machines that already have dotfiles")
 	fl.StringVar(&f.answers, "answers", "", "how chezmoi's prompts are answered: ask (in the terminal), defaults, or a preset name (default: config answers, a preset named like the bundle, else ask)")
 	f.apply.bind(c)
+	c.ValidArgsFunction = o.completeMachines(false)
 	return c
 }
 

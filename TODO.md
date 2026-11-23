@@ -12,10 +12,6 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   `az vm run-command` before the first SSH). Reuse the shape of lazyclash's
   `vps create` (quote → preview digest → apply → resume). Same machinery later
   for ephemeral cloud workers.
-- **Homebrew (P2, S)**: add a `tools.json` entry to `daviddwlee84/homebrew-tap`
-  (archive `lazylongarm_{tag}_{os}_{arch}.tar.gz`, checksums `checksums.txt`,
-  bundled completions); `upgrade` already delegates to `brew upgrade` for
-  Cellar installs.
 - **minisign verification of Longarm binaries (P2, S)**: SHA256SUMS is fetched
   from the same GitHub release; pin the release public key (built into
   longarmd, not published in the repo) and check `.minisig` with name+version
