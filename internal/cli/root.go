@@ -197,6 +197,7 @@ operating guide with --skill.`,
 	pf.StringVar(&o.color, "color", "auto", "auto | always | never (NO_COLOR is honored in auto)")
 	root.Flags().Bool("skill", false, "print the bundled agent operating guide")
 	root.AddCommand(hubCommand(o), workerCommand(o), peerCommand(o), userCommand(o), statusCommand(o), settingsCommand(o), companionCommand(o), skillCommand(o), versionCommand(o), upgradeCommand(o))
+	o.wireCompletion(root)
 	return root, o
 }
 

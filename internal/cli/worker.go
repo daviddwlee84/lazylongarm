@@ -77,6 +77,7 @@ the plan from flags. Rerunning skips steps that are already in place.`,
 // flow, peer add with the client enrollment on top.
 func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.Command {
 	c.Args = cobra.MaximumNArgs(1)
+	c.ValidArgsFunction = completeSSHHost
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if err := o.load(); err != nil {
 			return err

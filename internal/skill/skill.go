@@ -33,11 +33,14 @@ func Stub() (string, error) {
 		"lazylongarm:\n\n    lazylongarm --skill\n", nil
 }
 
+// Topics are the names `skill print` accepts (besides "" for SKILL.md).
+func Topics() []string { return []string{"skill"} }
+
 // Read returns SKILL.md (topic "") or an unknown-topic error.
 func Read(topic string) (string, error) {
 	if topic == "" || topic == "skill" {
 		b, err := files.ReadFile("lazylongarm/SKILL.md")
 		return string(b), err
 	}
-	return "", fmt.Errorf("unknown skill topic %q (available: skill)", strings.TrimSpace(topic))
+	return "", fmt.Errorf("unknown skill topic %q (available: %s)", strings.TrimSpace(topic), strings.Join(Topics(), ", "))
 }
