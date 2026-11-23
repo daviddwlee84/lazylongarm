@@ -318,6 +318,13 @@ func (c *Client) WorkerAdd(ctx context.Context, name string, ttl time.Duration, 
 	return secret.New(line), nil
 }
 
+// WorkerRemove revokes a worker the caller owns (or any, as an admin):
+// `longarm worker remove`.
+func (c *Client) WorkerRemove(ctx context.Context, name string) error {
+	_, err := c.Run(ctx, 30*time.Second, nil, "worker", "remove", name)
+	return err
+}
+
 // JoinCodeRequest describes `longarm admin join-code`.
 type JoinCodeRequest struct {
 	Role   string // "worker" (default) or "client"

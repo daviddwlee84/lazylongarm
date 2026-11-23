@@ -61,7 +61,8 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   after a backup.
 - **Ephemeral cloud workers (P3, L)**: cloud-init/`--service user` bootstrap with
   short TTL codes, `longarmd leave` + destroy; separate "disposable" hub or
-  labels. → [backlog](backlog/ephemeral-cloud-workers.md)
+  labels. Colab is done (`worker colab`); its shape is the template.
+  → [backlog](backlog/ephemeral-cloud-workers.md)
 - **Ports/forwards tab (P3, M)**: `longarm forward --list/--bg/--stop`, `link ls`,
   open in browser; Web preview if upstream #159 lands.
 - **Non-apt hub hosts (P3, M)**: bare `longarm-hub-linux-*` + the upstream

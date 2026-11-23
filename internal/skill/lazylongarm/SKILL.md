@@ -24,6 +24,7 @@ plan.
 | Apply it | same plus `--yes --json` |
 | Preview a peer (worker + its own longarm as a client, so sessions there can dispatch) | `lazylongarm peer add <ssh-alias> [--client-name N] [--client-user U] --dry-run --json` (admin certificate needed; show the user the warnings) |
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
+| Preview borrowing a Colab VM as a worker (bills compute units until removed) | `lazylongarm worker colab add [name] [--gpu T4] --dry-run --json`; list `worker colab ls --json`; remove `worker colab rm <name> --yes --json` |
 | Users, and the fleet workers every user may use | `lazylongarm user ls --json` |
 | Preview making this machine an admin of your Longarm user | `lazylongarm user self <user> [--device D] --dry-run --json` (the first user separates users) |
 | Preview moving a fleet worker to a user | `lazylongarm worker add <ssh-alias> --reenroll --owner <user> --dry-run --json` |
@@ -75,6 +76,9 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
 - Peer add does the same, then enrolls the machine's `longarm` as client
   `<worker>-client` (client join code over ssh stdin) and runs `longarm ls`
   there. Revoke with `longarm admin revoke <worker>-client`.
+- Colab workers are disposable: remove them when the work is done (`worker
+  colab rm`), copy results off first (a reclaimed VM takes its jobs' output
+  with it), and never use one as a network proxy (Colab forbids it).
 - Companion setup never replaces another tool's state: machines already in hc
   or herdr, and dotfiles already set up, are skipped; dotfiles from a different
   repository are refused. The dotfiles bootstrap and `herdr machine add` may

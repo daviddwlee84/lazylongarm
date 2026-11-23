@@ -14,6 +14,7 @@ type LongarmClient interface {
 	WhoAmI(ctx context.Context) (longarm.WhoAmI, error)
 	Workers(ctx context.Context) (longarm.WorkerList, error)
 	WorkerAdd(ctx context.Context, name string, ttl time.Duration, labels []string) (secret.Secret, error)
+	WorkerRemove(ctx context.Context, name string) error
 	AdminJoinCode(ctx context.Context, req longarm.JoinCodeRequest) (secret.Secret, error)
 	AdminApprove(ctx context.Context, name string) error
 	AdminRevoke(ctx context.Context, name string) error
