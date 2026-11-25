@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `upgrade` on a Homebrew install runs `brew update` before `brew upgrade`
+  (brew skips its own auto-update for a while and then only warns "already
+  installed") and checks the version Homebrew ended up with: a tap that has
+  not picked up the release yet is an error instead of "lazylongarm
+  upgraded". `upgrade --check` now reports the latest release for Homebrew
+  installs too, and a Homebrew install that is up to date says so.
+
 ## v0.5.0 — 2026-11-25
 
 - `hub share <host> [--targets] [--no-authorize]`: register this hub on

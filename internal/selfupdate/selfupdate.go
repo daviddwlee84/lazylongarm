@@ -98,8 +98,7 @@ func Inspect(ctx context.Context, current string) (Check, error) {
 	switch {
 	case strings.Contains(filepath.ToSlash(c.Resolved), "/Cellar/"+Formula+"/"):
 		c.Owner, c.Supported = OwnerHomebrew, true
-		c.Strategy = "brew upgrade " + Formula + "   (Homebrew decides the available version)"
-		return c, nil
+		c.Strategy = "brew update, then brew upgrade " + Formula + " (the tap can lag a fresh release)"
 	case Channel == "release-archive" && !modified:
 		c.Owner, c.Supported = OwnerArchive, true
 		c.Strategy = "download the release archive for " + runtime.GOOS + "/" + runtime.GOARCH + ", verify " + Checksums + ", replace " + c.Resolved
@@ -198,15 +197,56 @@ func Apply(ctx context.Context, c Check, logw io.Writer) error {
 	}
 	switch c.Owner {
 	case OwnerHomebrew:
-		cmd := execCmd(ctx, "brew", "upgrade", Formula)
-		cmd.Stdout, cmd.Stderr = logw, logw
-		return cmd.Run()
+		return applyHomebrew(ctx, c, logw)
 	case OwnerArchive:
 		return applyArchive(ctx, c, logw)
 	case OwnerGoInstall:
 		return applyGoInstall(ctx, c, logw)
 	}
 	return fmt.Errorf("no upgrade strategy for %s", c.Owner)
+}
+
+// applyHomebrew refreshes the taps first (brew upgrade skips its own
+// auto-update for a while after the last one, and then only warns
+// "already installed"), upgrades, and checks the version Homebrew ended
+// up with: a tap that has not synced the release yet is an error, not a
+// silent success.
+func applyHomebrew(ctx context.Context, c Check, logw io.Writer) error {
+	update := execCmd(ctx, "brew", "update", "--quiet")
+	update.Stdout, update.Stderr = logw, logw
+	if err := update.Run(); err != nil {
+		fmt.Fprintf(logw, "brew update failed (%v); upgrading with the taps as they are\n", err)
+	}
+	up := execCmd(ctx, "brew", "upgrade", Formula)
+	up.Stdout, up.Stderr = logw, logw
+	if err := up.Run(); err != nil {
+		return fmt.Errorf("brew upgrade %s: %w", Formula, err)
+	}
+	if c.Latest == "" {
+		return nil
+	}
+	got, err := HomebrewVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if Compare(got, c.Latest) < 0 {
+		return fmt.Errorf("Homebrew still installs %s, the latest release is %s: the tap has not picked it up yet; try again later (or `brew update && brew upgrade %s`)", got, c.Latest, Formula)
+	}
+	return nil
+}
+
+// HomebrewVersion is the version `brew list --versions` reports for the
+// formula, as "vX.Y.Z".
+func HomebrewVersion(ctx context.Context) (string, error) {
+	out, err := execCmd(ctx, "brew", "list", "--versions", Formula).Output()
+	if err != nil {
+		return "", fmt.Errorf("brew list --versions %s: %w", Formula, err)
+	}
+	f := strings.Fields(string(out))
+	if len(f) < 2 {
+		return "", fmt.Errorf("brew list --versions %s printed %q", Formula, strings.TrimSpace(string(out)))
+	}
+	return "v" + strings.TrimPrefix(f[len(f)-1], "v"), nil
 }
 
 func applyGoInstall(ctx context.Context, c Check, logw io.Writer) error {

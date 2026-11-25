@@ -7,6 +7,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +63,43 @@ func TestInspectLeavesLocalBuildsAlone(t *testing.T) {
 	}
 	if err := Apply(context.Background(), c, &bytes.Buffer{}); err == nil {
 		t.Fatal("applied an upgrade to a local build")
+	}
+}
+
+func fakeBrew(t *testing.T, installed string) *[]string {
+	t.Helper()
+	var calls []string
+	old := execCmd
+	t.Cleanup(func() { execCmd = old })
+	execCmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		out := ""
+		if strings.HasPrefix(call, "brew list --versions") {
+			out = Formula + " " + installed
+		}
+		return exec.CommandContext(ctx, "sh", "-c", `printf '%s\n' "$1"`, "sh", out)
+	}
+	return &calls
+}
+
+func TestApplyHomebrewUpdatesAndChecksTheResult(t *testing.T) {
+	calls := fakeBrew(t, "0.5.0")
+	c := Check{Owner: OwnerHomebrew, Supported: true, Current: "v0.4.3", Latest: "v0.5.0"}
+	if err := Apply(context.Background(), c, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "brew update --quiet|brew upgrade " + Formula + "|brew list --versions " + Formula
+	if got := strings.Join(*calls, "|"); got != want {
+		t.Fatalf("calls\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestApplyHomebrewTapLagIsAnError(t *testing.T) {
+	fakeBrew(t, "0.4.3") // brew upgrade only warned "already installed"
+	c := Check{Owner: OwnerHomebrew, Supported: true, Current: "v0.4.3", Latest: "v0.5.0"}
+	err := Apply(context.Background(), c, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "still installs v0.4.3") {
+		t.Fatalf("want a tap-lag error, got %v", err)
 	}
 }
