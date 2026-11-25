@@ -19,12 +19,6 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   doctor`'s macOS `ProcessType` warning in `fleet`; bump "Verified against".
   Document the migration for hubs that relied on a same-named admin login
   (add another admin login, remove the old one, `longarm panel-login`).
-- **After the next release: turn on the tap's upgrade check (P2, S)**: add
-  `"upgrade_check": ["upgrade", "--check", "--json"]` to lazylongarm's entry
-  in `daviddwlee84/homebrew-tap`'s `tools.json`. Each sync then installs the
-  formula on a clean runner and requires `owner` homebrew, `formula`
-  `daviddwlee84/tap/lazylongarm` and `supported` true. Releases up to v0.5.1
-  lack those keys, so turning it on earlier fails the sync.
 - **Hub settings kept on the hub host (P3, M)**: `hub share` copies the hub
   entry to each operator machine, so `hub panel-access` on one leaves the
   others stale until shared again. Keep the entry (minus machine-local
