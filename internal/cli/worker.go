@@ -90,7 +90,7 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 		}
 		hub, ok := o.cfg.Hub(f.hubID)
 		if !ok {
-			return usage("no hub configured: run `lazylongarm hub setup` first")
+			return usage("no hub configured: run `lazylongarm hub setup` first (or `lazylongarm hub import`, or `hub share <this host>` from a machine that operates the hub)")
 		}
 		f.req.Hub = hub
 		if f.req.Version == "" {

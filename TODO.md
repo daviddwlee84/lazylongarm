@@ -19,6 +19,11 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   doctor`'s macOS `ProcessType` warning in `fleet`; bump "Verified against".
   Document the migration for hubs that relied on a same-named admin login
   (add another admin login, remove the old one, `longarm panel-login`).
+- **Hub settings kept on the hub host (P3, M)**: `hub share` copies the hub
+  entry to each operator machine, so `hub panel-access` on one leaves the
+  others stale until shared again. Keep the entry (minus machine-local
+  fields) in a file on the hub host and let `hub status` / the dashboard
+  refresh from it.
 - **Hub VM in the dashboard (P3, S)**: `hub vm` exists (status/start/stop/
   restart/delete); add Hub-tab actions and show the cost estimate there.
 - **"Create a dedicated hub VM" in the hub setup wizard (P3, L)**: automate a

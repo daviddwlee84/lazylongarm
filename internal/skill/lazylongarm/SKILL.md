@@ -23,6 +23,8 @@ plan.
 | Preview adding a worker | `lazylongarm worker add <ssh-alias> [--name N] [--label k=v] [--service system\|user] --dry-run --json` |
 | Apply it | same plus `--yes --json` |
 | Preview a peer (worker + its own longarm as a client, so sessions there can dispatch) | `lazylongarm peer add <ssh-alias> [--client-name N] [--client-user U] --dry-run --json` (admin certificate needed; show the user the warnings) |
+| Preview sharing the hub with another operator machine (its longarm joined; authorizes its SSH key on the hub host) | `lazylongarm hub share <ssh-alias> [--targets] [--identity <key path there>] [--no-authorize] --dry-run --json`; apply with `--yes --json` |
+| Register the hub on this machine from its joined longarm | `lazylongarm hub import [--ssh-host <hub-alias>] --dry-run --json` |
 | Workers (hub registry + managed machines) | `lazylongarm worker ls --json` |
 | Preview borrowing a Colab VM as a worker (bills compute units until removed) | `lazylongarm worker colab add [name] [--gpu T4] --dry-run --json`; list `worker colab ls --json`; remove `worker colab rm <name> --yes --json` |
 | Users, and the fleet workers every user may use | `lazylongarm user ls --json` |

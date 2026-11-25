@@ -923,6 +923,7 @@ func (m *Model) actions() []action {
 	case tabHub:
 		out = append(out,
 			action{"setup", map[bool]string{true: "rerun hub setup", false: "hub setup"}[hasHub], []string{"S"}, !m.toolBusy, func() tea.Cmd { return m.runTool("Hub setup", "hub", "setup") }},
+			action{"import", "import hub", []string{"I"}, !hasHub && !m.toolBusy, func() tea.Cmd { return m.runTool("Hub import", "hub", "import") }},
 			action{"panel", map[bool]string{true: "close panel", false: "web panel"}[m.panel != nil], []string{"p"}, hasHub && (m.hub.SSHHost != "" || m.hub.PanelURL() != "") && !m.panelPending, func() tea.Cmd { return m.togglePanel() }},
 			action{"panel-user", "panel logins", []string{"U"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel login", "hub", "panel-user") }},
 			action{"panel-access", "panel access", []string{"A"}, hasHub && m.hub.SSHHost != "" && !m.toolBusy, func() tea.Cmd { return m.runTool("Panel access", "hub", "panel-access") }},

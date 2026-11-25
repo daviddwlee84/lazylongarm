@@ -32,7 +32,7 @@ import (
 
 func hubCommand(o *options) *cobra.Command {
 	c := &cobra.Command{Use: "hub", Short: "Set up and inspect the longarm-hub you operate", Args: cobra.ArbitraryArgs, RunE: groupHelp}
-	c.AddCommand(hubSetupCommand(o), hubStatusCommand(o), hubPanelCommand(o), hubPanelUserCommand(o), hubPanelAccessCommand(o), hubBackupCommand(o), hubVMCommand(o))
+	c.AddCommand(hubSetupCommand(o), hubStatusCommand(o), hubPanelCommand(o), hubPanelUserCommand(o), hubPanelAccessCommand(o), hubBackupCommand(o), hubVMCommand(o), hubImportCommand(o), hubShareCommand(o))
 	return c
 }
 
@@ -378,7 +378,7 @@ func (o *options) requireHub(id string) (*config.Hub, error) {
 		if id != "" {
 			return nil, usage("no hub %q in %s", id, o.cfg.Path())
 		}
-		return nil, usage("no hub configured yet: run `lazylongarm hub setup`")
+		return nil, usage("no hub configured yet: run `lazylongarm hub setup`, `lazylongarm hub import` (this machine's longarm already joined), or `lazylongarm hub share <this host>` on a machine that operates the hub")
 	}
 	return h, nil
 }

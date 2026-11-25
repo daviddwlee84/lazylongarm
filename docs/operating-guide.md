@@ -234,6 +234,46 @@ run.
   review warns, and louder when the account is root-equivalent. Revoke with
   `longarm admin revoke <client node name>`.
 
+## A second operator machine
+
+To operate the hub from more than one machine (a laptop at home, a desktop
+at work), make each one's longarm a client first (`lazylongarm peer add
+<host>` from a machine that already operates the hub), then share the hub:
+
+```sh
+lazylongarm hub share work-desktop --targets --dry-run   # review
+lazylongarm hub share work-desktop --targets             # apply
+```
+
+The plan checks that the machine's longarm is joined to the same hub (its
+`hub.toml` address and the fingerprint of its `tls/ca.crt`) and that it has a
+lazylongarm with `hub import`. Then it:
+
+1. pins the hub host's SSH key on the machine, copied from this machine's
+   `known_hosts` (never `ssh-keyscan`); the review shows the fingerprints;
+2. adds the machine's existing default public key to the hub host's
+   `authorized_keys` unless it can already ssh there (`--no-authorize` skips;
+   lazylongarm never creates keys: without one, `ssh-keygen -t ed25519` there
+   first, or name an existing key with `--identity ~/.ssh/<key>`: then a
+   `Host lazylongarm-hub-<id>` alias with that `IdentityFile` goes into a file
+   that an `Include` glob of its `~/.ssh/config` already picks up, e.g.
+   `~/.ssh/config.d/*`; `~/.ssh/config` itself is never edited, and without
+   such a glob the plan stops and names the line to add);
+3. registers the hub in its lazylongarm config over ssh stdin (`hub import
+   --stdin`); a `ssh_host` alias the machine resolves to another host is
+   written as this machine's `user@hostname`;
+4. runs `hub status` there.
+
+With `--targets` the machines lazylongarm manages go along; aliases the other
+machine resolves differently (or not at all) and this machine's own entry are
+skipped with a warning. No private key or certificate travels. Each machine
+keeps its own copy, so share again after `hub panel-access` or a hub move. Hub
+VM and firewall checks there need that machine's own `az login`.
+
+On a machine without a configured operator machine at hand, `lazylongarm hub
+import --ssh-host <hub host>` derives the hub from its own joined longarm
+(`I` on the dashboard's empty Hub tab).
+
 ## Colab workers
 
 `worker colab add [name]` borrows a Google Colab VM as a temporary worker

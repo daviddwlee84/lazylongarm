@@ -270,7 +270,7 @@ func (m *Model) View() tea.View {
 func (m *Model) header() string {
 	t := m.th
 	badge := t.Badge.Render(" lazylongarm ")
-	left := badge + " " + t.Warn.Render("no hub yet — press 3, then S to set one up")
+	left := badge + " " + t.Warn.Render("no hub yet — press 3, then S to set one up (I to import one)")
 	if m.hub != nil {
 		left = badge + " " + t.Muted.Render("hub ") + t.Bold.Render(m.hub.ID) + t.Muted.Render(" · "+m.hub.Address)
 	}
@@ -434,6 +434,9 @@ func (m *Model) listContent(l layout) (string, []string) {
 				"",
 				t.Muted.Render("Press ") + key("S") + t.Muted.Render(" to run the hub setup wizard: pick an SSH host, review the plan,"),
 				t.Muted.Render("and lazylongarm installs longarm-hub, opens its ports and enrolls this machine."),
+				"",
+				t.Muted.Render("Already operate a hub from another machine? Press ") + key("I") + t.Muted.Render(" to import it from this machine's longarm,"),
+				t.Muted.Render("or run ") + t.Bold.Render("lazylongarm hub share <this host>") + t.Muted.Render(" on that machine."),
 			}
 		}
 		return "Hub " + m.hub.ID, m.hubInfoLines()
