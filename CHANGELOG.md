@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.2 — 2026-11-26
 
 - Finding the latest release (lazylongarm's `upgrade`, Longarm's for
   `worker add` / `hub setup`) no longer fails when GitHub's unauthenticated
