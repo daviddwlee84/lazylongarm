@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,12 +30,16 @@ import (
 
 // Repo and module coordinates.
 const (
-	Repo      = "daviddwlee84/lazylongarm"
-	Module    = "github.com/daviddwlee84/lazylongarm"
-	MainPkg   = Module + "/cmd/lazylongarm"
-	Binary    = "lazylongarm"
-	Formula   = "lazylongarm"
-	Checksums = "checksums.txt"
+	Repo    = "daviddwlee84/lazylongarm"
+	Module  = "github.com/daviddwlee84/lazylongarm"
+	MainPkg = Module + "/cmd/lazylongarm"
+	Binary  = "lazylongarm"
+	Formula = "lazylongarm"
+	// TapFormula is the formula's full name: brew commands use it, so a
+	// same-named formula elsewhere (homebrew-core, another tap) is never
+	// the one upgraded.
+	TapFormula = "daviddwlee84/tap/" + Formula
+	Checksums  = "checksums.txt"
 )
 
 // Channel is set by release builds: -X .../selfupdate.Channel=release-archive.
@@ -60,15 +65,34 @@ const (
 
 // Check is the read-only upgrade assessment (`upgrade --check`).
 type Check struct {
-	Current   string   `json:"current"`
-	Latest    string   `json:"latest,omitempty"`
-	UpToDate  bool     `json:"up_to_date"`
-	Exe       string   `json:"executable"`
-	Resolved  string   `json:"resolved"`
-	Owner     Owner    `json:"owner"`
+	Current  string `json:"current"`
+	Latest   string `json:"latest,omitempty"`
+	UpToDate bool   `json:"up_to_date"` // meaningful only with Latest; see MarshalJSON
+	Exe      string `json:"executable"`
+	Resolved string `json:"resolved"`
+	Owner    Owner  `json:"owner"`
+	// Formula is the tap-qualified formula of a Homebrew install.
+	Formula   string   `json:"formula,omitempty"`
 	Strategy  string   `json:"strategy"`
 	Supported bool     `json:"apply_supported"`
 	Notes     []string `json:"notes,omitempty"`
+}
+
+// MarshalJSON leaves out up_to_date when the latest release is unknown
+// (rather than reporting a guessed false) and repeats apply_supported as
+// "supported", the key package-manager checks (the Homebrew tap's) read.
+func (c Check) MarshalJSON() ([]byte, error) {
+	type plain Check
+	out := struct {
+		plain
+		UpToDate  *bool `json:"up_to_date,omitempty"`
+		Supported bool  `json:"supported"`
+	}{plain: plain(c), Supported: c.Supported}
+	if c.Latest != "" {
+		v := c.UpToDate
+		out.UpToDate = &v
+	}
+	return json.Marshal(out)
 }
 
 // Inspect resolves the owner and, unless the manager owns versioning, the
@@ -98,8 +122,8 @@ func Inspect(ctx context.Context, current string) (Check, error) {
 	}
 	switch {
 	case strings.Contains(filepath.ToSlash(c.Resolved), "/Cellar/"+Formula+"/"):
-		c.Owner, c.Supported = OwnerHomebrew, true
-		c.Strategy = "brew update, then brew upgrade " + Formula + " (the tap can lag a fresh release)"
+		c.Owner, c.Supported, c.Formula = OwnerHomebrew, true, TapFormula
+		c.Strategy = "brew update, then brew upgrade " + TapFormula + " (the tap can lag a fresh release)"
 	case Channel == "release-archive" && !modified:
 		c.Owner, c.Supported = OwnerArchive, true
 		c.Strategy = "download the release archive for " + runtime.GOOS + "/" + runtime.GOARCH + ", verify " + Checksums + ", replace " + c.Resolved
@@ -202,10 +226,10 @@ func applyHomebrew(ctx context.Context, c Check, logw io.Writer) error {
 	if err := update.Run(); err != nil {
 		fmt.Fprintf(logw, "brew update failed (%v); upgrading with the taps as they are\n", err)
 	}
-	up := execCmd(ctx, "brew", "upgrade", Formula)
+	up := execCmd(ctx, "brew", "upgrade", TapFormula)
 	up.Stdout, up.Stderr = logw, logw
 	if err := up.Run(); err != nil {
-		return fmt.Errorf("brew upgrade %s: %w", Formula, err)
+		return fmt.Errorf("brew upgrade %s: %w", TapFormula, err)
 	}
 	if c.Latest == "" {
 		return nil
@@ -215,7 +239,7 @@ func applyHomebrew(ctx context.Context, c Check, logw io.Writer) error {
 		return err
 	}
 	if Compare(got, c.Latest) < 0 {
-		return fmt.Errorf("Homebrew still installs %s, the latest release is %s: the tap has not picked it up yet; try again later (or `brew update && brew upgrade %s`)", got, c.Latest, Formula)
+		return fmt.Errorf("Homebrew still installs %s, the latest release is %s: the tap has not picked it up yet; try again later (or `brew update && brew upgrade %s`)", got, c.Latest, TapFormula)
 	}
 	return nil
 }
@@ -223,13 +247,13 @@ func applyHomebrew(ctx context.Context, c Check, logw io.Writer) error {
 // HomebrewVersion is the version `brew list --versions` reports for the
 // formula, as "vX.Y.Z".
 func HomebrewVersion(ctx context.Context) (string, error) {
-	out, err := execCmd(ctx, "brew", "list", "--versions", Formula).Output()
+	out, err := execCmd(ctx, "brew", "list", "--versions", TapFormula).Output()
 	if err != nil {
-		return "", fmt.Errorf("brew list --versions %s: %w", Formula, err)
+		return "", fmt.Errorf("brew list --versions %s: %w", TapFormula, err)
 	}
 	f := strings.Fields(string(out))
 	if len(f) < 2 {
-		return "", fmt.Errorf("brew list --versions %s printed %q", Formula, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("brew list --versions %s printed %q", TapFormula, strings.TrimSpace(string(out)))
 	}
 	return "v" + strings.TrimPrefix(f[len(f)-1], "v"), nil
 }

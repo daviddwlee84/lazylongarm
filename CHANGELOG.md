@@ -10,6 +10,11 @@
 - `upgrade` on a Homebrew install treats an unknown latest release as a note
   and lets Homebrew decide, instead of failing with "HTTP 403" (a v0.5.1
   regression).
+- `upgrade --check --json` leaves out `up_to_date` when the latest release is
+  unknown (it used to report `false`), adds `supported` (same as
+  `apply_supported`) and, for Homebrew installs, `formula`
+  (`daviddwlee84/tap/lazylongarm`); `upgrade` runs brew with that full name,
+  so a same-named formula elsewhere is never the one upgraded.
 
 ## v0.5.1 — 2026-11-25
 
