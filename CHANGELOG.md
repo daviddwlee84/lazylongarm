@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0 — 2026-11-25
+
+- `hub share <host> [--targets] [--no-authorize]`: register this hub on
+  another operator machine whose longarm is joined to it (checked: hub
+  address and CA fingerprint). Pins the hub host's SSH key there from this
+  machine's `known_hosts`, adds its existing public key to the hub host's
+  `authorized_keys` when it cannot ssh there yet, imports the hub entry over
+  ssh stdin, and checks `hub status` from there. `--targets` brings the
+  managed machines whose aliases resolve the same there. `--identity <key>`
+  uses an existing key there and writes a `Host lazylongarm-hub-<id>` alias
+  into a file its `~/.ssh/config` already Includes (never the file itself).
+- `hub import`: register a hub derived from this machine's joined longarm
+  (`--ssh-host` to manage the hub host too), or from `hub share` with
+  `--stdin`. A hub with the same address and CA is updated in place; another
+  hub under the same id is refused (`--id`).
+- The dashboard's empty Hub tab offers `I` (import), and "no hub" errors name
+  `hub import` / `hub share`.
+
 ## v0.4.3 — 2026-11-25
 
 - `peer add` handles a later device of a user: when the client user already

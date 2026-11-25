@@ -152,6 +152,8 @@ back with `longarm admin revoke <worker>-client`.
 | `hub panel-user [NAME]` | create a web panel login (password + TOTP) |
 | `hub panel-access [loopback\|tailnet\|public]` | reach the panel over SSH only, on your tailnet (installs Tailscale, `tailscale serve`), or on public HTTPS (Let's Encrypt) |
 | `hub backup` | stop briefly, archive `/var/lib/longarm-hub` into the state dir (0600) |
+| `hub share HOST [--targets] [--identity KEY]` | register this hub on another operator machine whose longarm is joined (pins the hub host key, authorizes its key on the hub host, imports, checks `hub status` there) |
+| `hub import [--ssh-host H] \| --stdin` | register a hub here from this machine's longarm (or from `hub share`) |
 | `hub vm status\|start\|stop\|restart\|delete` | the hub's Azure VM: power, size, traffic, cost estimate; reviewed lifecycle actions |
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags; `--fetch auto\|push\|remote`) |
 | `peer add [host] \| --local` | a worker whose own longarm is also enrolled as a client (`--client-name`, `--client-user`) |

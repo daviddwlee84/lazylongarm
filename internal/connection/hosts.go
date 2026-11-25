@@ -3,6 +3,7 @@ package connection
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -96,4 +97,79 @@ func ResolveHostname(ctx context.Context, alias string) string {
 		}
 	}
 	return ""
+}
+
+// SSHTarget is what OpenSSH resolves a host argument to (`ssh -G`).
+type SSHTarget struct {
+	Hostname  string
+	User      string
+	Port      string
+	ProxyJump string
+}
+
+// Direct reports whether the target is reachable as plain user@hostname on
+// port 22 (no jump host, no other port), so it can be written down as such
+// for another machine whose ssh config lacks this alias.
+func (t SSHTarget) Direct() bool {
+	return t.ProxyJump == "" && (t.Port == "" || t.Port == "22")
+}
+
+// UserHost is "user@hostname" (or the hostname alone without a user).
+func (t SSHTarget) UserHost() string {
+	if t.User == "" {
+		return t.Hostname
+	}
+	return t.User + "@" + t.Hostname
+}
+
+// KnownHostsKey is the name known_hosts files this host under: the hostname,
+// or "[hostname]:port" for a port other than 22.
+func (t SSHTarget) KnownHostsKey() string {
+	if t.Port == "" || t.Port == "22" {
+		return t.Hostname
+	}
+	return "[" + t.Hostname + "]:" + t.Port
+}
+
+// ParseSSHG reads `ssh -G` output.
+func ParseSSHG(out []byte) SSHTarget {
+	var t SSHTarget
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		switch k {
+		case "hostname":
+			t.Hostname = v
+		case "user":
+			t.User = v
+		case "port":
+			t.Port = v
+		case "proxyjump":
+			if v != "none" {
+				t.ProxyJump = v
+			}
+		}
+	}
+	return t
+}
+
+// ResolveSSH resolves host the way this machine's ssh would (`ssh -G`).
+func ResolveSSH(ctx context.Context, host string) (SSHTarget, error) {
+	if err := ValidateHost(host); err != nil {
+		return SSHTarget{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := commandContext(ctx, "ssh", "-G", "--", host).Output()
+	if err != nil {
+		return SSHTarget{}, fmt.Errorf("ssh -G %s: %w", host, err)
+	}
+	t := ParseSSHG(out)
+	if t.Hostname == "" {
+		return SSHTarget{}, fmt.Errorf("ssh -G %s printed no hostname", host)
+	}
+	return t, nil
 }
