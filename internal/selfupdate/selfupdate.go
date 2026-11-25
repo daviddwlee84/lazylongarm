@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/daviddwlee84/lazylongarm/internal/ghrelease"
 )
 
 // Repo and module coordinates.
@@ -117,6 +118,12 @@ func Inspect(ctx context.Context, current string) (Check, error) {
 	}
 	latest, err := LatestTag(ctx)
 	if err != nil {
+		if c.Owner == OwnerHomebrew {
+			// brew knows what its tap offers; the version check after
+			// the upgrade is skipped without a known latest release.
+			c.Notes = append(c.Notes, "latest release unknown ("+err.Error()+"); Homebrew decides")
+			return c, nil
+		}
 		return c, err
 	}
 	c.Latest = latest
@@ -126,33 +133,11 @@ func Inspect(ctx context.Context, current string) (Check, error) {
 
 // LatestTag returns the newest published (non-draft, non-prerelease) tag.
 func LatestTag(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/repos/"+Repo+"/releases/latest", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "lazylongarm-upgrade")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("query the latest release: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	tag, err := ghrelease.Latest(ctx, ghrelease.Source{Repo: Repo, APIBase: apiBase, WebBase: dlBase, UserAgent: "lazylongarm-upgrade", Client: httpClient, Valid: semverRE})
+	if errors.Is(err, ghrelease.ErrNoRelease) {
 		return "", errors.New("no published lazylongarm release yet")
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("query the latest release: HTTP %d", resp.StatusCode)
-	}
-	var body struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return "", err
-	}
-	if !semverRE.MatchString(body.TagName) {
-		return "", fmt.Errorf("unexpected release tag %q", body.TagName)
-	}
-	return body.TagName, nil
+	return tag, err
 }
 
 // Compare orders vMAJOR.MINOR.PATCH tags; unparsable versions sort first.

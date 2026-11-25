@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Finding the latest release (lazylongarm's `upgrade`, Longarm's for
+  `worker add` / `hub setup`) no longer fails when GitHub's unauthenticated
+  API limit (60 requests an hour per IP, quickly used up behind a shared
+  proxy) is exhausted: it uses `GH_TOKEN` / `GITHUB_TOKEN` when set and
+  falls back to the `github.com/<repo>/releases/latest` redirect.
+- `upgrade` on a Homebrew install treats an unknown latest release as a note
+  and lets Homebrew decide, instead of failing with "HTTP 403" (a v0.5.1
+  regression).
+
 ## v0.5.1 — 2026-11-25
 
 - `upgrade` on a Homebrew install runs `brew update` before `brew upgrade`
