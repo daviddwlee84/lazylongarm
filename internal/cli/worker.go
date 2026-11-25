@@ -140,7 +140,7 @@ func machineAddCommand(o *options, f *workerAddFlags, c *cobra.Command) *cobra.C
 	fl.StringVar(&f.req.Owner, "owner", "", "make it a worker owned by this Longarm user (admin join code with --owner; with --reenroll it moves a fleet worker to the user)")
 	if f.peer {
 		fl.StringVar(&f.clientName, "client-name", "", "client node name (default: <worker name>-client; node names are unique on the hub)")
-		fl.StringVar(&f.clientUser, "client-user", "", "Longarm user the client certificate belongs to (required once the hub separates users)")
+		fl.StringVar(&f.clientUser, "client-user", "", "Longarm user the client acts as once the hub separates users (default: yours; a user with a device already signs in via longarm login + /link)")
 	}
 	fl.StringVar(&f.req.Fetch, "fetch", flows.FetchAuto, "how the binaries reach the machine: auto (it downloads them from GitHub, else push) | push (copy from here over ssh; no GitHub access needed there) | remote (it downloads them, no fallback)")
 	fl.StringVar(&f.req.Mint, "mint", "", "join code source: admin (admin join-code + approve; default for admins) | owner (longarm worker add; needs a Longarm user)")
@@ -197,13 +197,18 @@ func (o *options) buildMachine(ctx context.Context, f *workerAddFlags, req flows
 	}
 	if f.peer {
 		pr := flows.PeerRequest{WorkerRequest: req, ClientName: f.clientName, ClientUser: f.clientUser, Tenancy: who.Tenancy}
-		if who.Tenancy && f.clientUser != "" {
-			// A user-bound code only enrolls a user's first device.
+		if who.Tenancy && pr.ClientUser == "" && who.User != "" {
+			// The machine acts as you unless told otherwise.
+			pr.ClientUser, pr.ClientUserDefaulted = who.User, true
+		}
+		if who.Tenancy && pr.ClientUser != "" {
+			// A user-bound code only enrolls a user's first device; later
+			// ones sign in with longarm login and an approval at /link.
 			uctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			users, err := client.AdminUsers(uctx)
 			cancel()
 			if err == nil {
-				if u, ok := users.Find(f.clientUser); ok {
+				if u, ok := users.Find(pr.ClientUser); ok {
 					pr.ClientUserDevices, pr.ClientUserPanel = u.DeviceCount, u.Panel
 				}
 			}
@@ -311,7 +316,10 @@ func (o *options) finishWorkerAdd(cmd *cobra.Command, p *plan.Plan, f *workerAdd
 		}
 		fmt.Fprintf(out, "\nWorker %s is online (%s).\n\nTry:\n", name, dash(env.Get("worker_path")))
 		if f.peer {
-			client := flows.PeerDefaults(flows.PeerRequest{WorkerRequest: flows.WorkerRequest{Name: name}, ClientName: f.clientName}, nil).ClientName
+			client := env.Get("client_name") // whoami there: the hub's device name after /link
+			if client == "" {
+				client = flows.PeerDefaults(flows.PeerRequest{WorkerRequest: flows.WorkerRequest{Name: name}, ClientName: f.clientName}, nil).ClientName
+			}
 			fmt.Fprintf(out, "  longarm exec %s -- sh -lc 'longarm ls'   # its own longarm sees the fleet (client %s)\n", name, client)
 			fmt.Fprintf(out, "  longarm admin revoke %s               # take the client certificate back\n", client)
 		}
@@ -392,7 +400,9 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			{Key: "service", Label: "Run longarmd as", Kind: wizard.Select, Value: req.Service, Options: serviceChoices},
 		}
 		if f.peer {
-			fields = append(fields, wizard.Field{Key: "client", Label: "Client name", Value: f.clientName, Help: "its longarm's node name (default: <worker name>-client)"})
+			fields = append(fields,
+				wizard.Field{Key: "client", Label: "Client name", Value: f.clientName, Help: "its longarm's node name (default: <worker name>-client; a later device of a user gets the hub's name)"},
+				wizard.Field{Key: "client-user", Label: "Client user", Value: f.clientUser, Help: "the Longarm user it acts as, when the hub separates users (default: yours)"})
 		}
 		if host != "" {
 			fields = append(fields, wizard.Field{Key: "fetch", Label: "Binaries", Kind: wizard.Select, Value: req.Fetch, Options: []wizard.Choice{
@@ -429,6 +439,7 @@ func (o *options) workerAddWizard(cmd *cobra.Command, f *workerAddFlags) error {
 			req.DirectTailnet = values["direct"] == "true"
 			if f.peer {
 				f.clientName = strings.TrimSpace(values["client"])
+				f.clientUser = strings.TrimSpace(values["client-user"])
 			}
 			p, err := o.buildMachine(ctx, f, req, facts)
 			if err != nil {

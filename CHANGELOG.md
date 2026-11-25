@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- `peer add` handles a later device of a user: when the client user already
+  has a device (upstream issues user-bound codes for a user's first device
+  only), the new `link-client` step runs `longarm login <hub>
+  --ca-fingerprint <fp> --no-browser --link` on the machine with the terminal
+  handed over, to approve at the panel's `/link`. The review says who can
+  approve and that an admin panel login makes the device an admin. Without a
+  terminal it stops with the exact command, so a bare `longarm login` never
+  signs in to the hub built into the release. Previously the plan was refused,
+  even in `--dry-run`, and even when the machine was already signed in.
+- `peer add --client-user` defaults to this machine's own user once the hub
+  separates users; the wizard has a Client user field (it used to stop with
+  "pass --client-user").
+- The client steps check that `longarm whoami` on the machine acts as the
+  client user, and record its node name (the hub's device name after `/link`).
+- The dashboard's Details pane shows a peer's client node.
+- The later-device hint no longer suggests `longarm admin issue --role client
+  --user` on the hub host (the hub host has no `longarm`, and `longarm-hub
+  issue` has no `--user`).
+
 ## v0.4.2 — 2026-11-23
 
 - Shell completion completes SSH hosts from `~/.ssh/config` (`worker add`,

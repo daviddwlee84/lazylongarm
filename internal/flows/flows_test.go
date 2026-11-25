@@ -316,8 +316,6 @@ func TestPeerValidation(t *testing.T) {
 		{PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Mint: MintOwner}}, "needs an admin certificate"},
 		{PeerRequest{WorkerRequest: base, Tenancy: true}, "--client-user"},
 		{PeerRequest{WorkerRequest: base, ClientName: "bad name"}, "client name"},
-		{PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1}, "admin panel login named alice"},
-		{PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1, ClientUserPanel: true}, "alice's panel login (a client certificate)"},
 	}
 	for _, tc := range cases {
 		req := PeerDefaults(tc.req, ubuntu())
@@ -328,6 +326,110 @@ func TestPeerValidation(t *testing.T) {
 	ok := PeerDefaults(PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice"}, ubuntu())
 	if err := ValidatePeer(ok, ubuntu()); err != nil || ok.ClientName != "worker-1-client" {
 		t.Fatalf("valid peer: %v (%q)", err, ok.ClientName)
+	}
+	// A later device of a user is valid: it signs in at /link instead.
+	later := PeerDefaults(PeerRequest{WorkerRequest: base, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1}, ubuntu())
+	if err := ValidatePeer(later, ubuntu()); err != nil || !later.Link() {
+		t.Fatalf("later device: %v (link %v)", err, later.Link())
+	}
+}
+
+// A user with a device already: the client part signs in with longarm login
+// against this hub (not the release's built-in one) and an approval at /link.
+func TestPeerLinkPlan(t *testing.T) {
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "aabbcc", Mode: config.ModePublic}
+	client := &fakeClient{code: secret.New("C0DE-3")}
+	for _, panel := range []bool{false, true} {
+		req := PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Version: "v0.1.42"}, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1, ClientUserPanel: panel, ClientUserDefaulted: true}
+		p, err := BuildPeerAdd(req, ubuntu(), WorkerDeps{Client: client})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ids(p); got != "binaries,enroll,service,online,try-it,link-client,try-peer,save-target" {
+			t.Fatalf("steps %s", got)
+		}
+		var b strings.Builder
+		p.Render(&b)
+		review := b.String()
+		want := []string{"login hub.example.com:7443 --ca-fingerprint", "/link", "admin panel login named alice", "this machine's user", "a client device of user alice"}
+		if panel {
+			want = append(want, "alice's panel login (a client certificate)")
+		}
+		for _, s := range want {
+			if !strings.Contains(review, s) {
+				t.Errorf("panel=%v: review lacks %q", panel, s)
+			}
+		}
+		if strings.Contains(review, "worker-1-client") {
+			t.Errorf("review names the ignored default client name")
+		}
+	}
+	if len(client.joinCodes) != 0 {
+		t.Fatal("link mode minted a client code")
+	}
+	// Without a terminal, Apply refuses and the fix carries the full login
+	// command (hub and fingerprint), so nobody signs in to another hub.
+	p, err := BuildPeerAdd(PeerRequest{WorkerRequest: WorkerRequest{Host: "worker-1", Hub: hub, Version: "v0.1.42"}, Tenancy: true, ClientUser: "alice", ClientUserDevices: 2}, ubuntu(), WorkerDeps{Client: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stepByID(t, p, "link-client").Apply(context.Background(), plan.NewEnv())
+	var fe *plan.FixError
+	if !errors.As(err, &fe) || !strings.Contains(fe.Fix, "ssh -t worker-1 ") || !strings.Contains(fe.Fix, "login hub.example.com:7443 --ca-fingerprint aabbcc") {
+		t.Fatalf("apply without a terminal: %v", err)
+	}
+}
+
+// The client steps' Verify reads whoami on the machine: the user must match,
+// and the device name the hub picked is what save-target records.
+func TestPeerClientVerify(t *testing.T) {
+	hub := &config.Hub{ID: "hub-1", Address: "hub.example.com:7443", CAFingerprint: "aabbcc", Mode: config.ModePublic}
+	for _, tc := range []struct {
+		user, wantErr string
+	}{
+		{"alice", ""},
+		{"bob", `acts as user "bob", not "alice"`},
+	} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		writeFile(t, filepath.Join(home, ".config", "longarm", "hub.toml"), `address = "hub.example.com:7443"`)
+		writeFile(t, filepath.Join(home, ".config", "longarm", "tls", "node.crt"), "x")
+		bin := filepath.Join(home, ".local", "bin", "longarm")
+		writeFile(t, bin, "#!/bin/sh\necho '{\"name\":\""+tc.user+"-box\",\"user\":\""+tc.user+"\",\"role\":\"admin\"}'\n")
+		if err := os.Chmod(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f := ubuntu()
+		f.Home = home
+		store, _ := config.Load(filepath.Join(home, "c.toml"), false)
+		if err := store.Update(func(c *config.Config) error { c.UpsertHub(*hub); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		p, err := BuildPeerAdd(PeerRequest{WorkerRequest: WorkerRequest{Name: "worker-1", Hub: hub, Version: "v0.1.42"}, Tenancy: true, ClientUser: "alice", ClientUserDevices: 1}, f, WorkerDeps{Client: &fakeClient{}, Config: store})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := stepByID(t, p, "link-client")
+		env := plan.NewEnv()
+		if ok, err := s.Check(context.Background(), env); err != nil || !ok {
+			t.Fatalf("%s: check %v, %v; want already in place", tc.user, ok, err)
+		}
+		err = s.Verify(context.Background(), env)
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Fatalf("verify: %v", err)
+			}
+			if err := stepByID(t, p, "save-target").Apply(context.Background(), env); err != nil {
+				t.Fatal(err)
+			}
+			if got := store.Targets[0].ClientName; got != "alice-box" {
+				t.Fatalf("saved client %q, want the hub's device name", got)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: verify %v, want %q", tc.user, err, tc.wantErr)
+		}
 	}
 }
 

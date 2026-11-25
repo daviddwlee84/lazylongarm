@@ -32,13 +32,17 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   block: guide creating the OAuth client (redirect URI
   `<public_url>/auth/callback/<provider>`), pass the client secret over stdin to
   a root:longarm-hub 0640 file, set `admins` / `allowed`.
-- **Later devices of a user via `/link` (P2, M)**: once a user has a device,
-  upstream refuses user-bound codes; `peer add` now stops with the manual
-  steps. Automate them: run `longarm login --no-browser` on the machine (over
-  SSH), open the panel's `/link` (tailnet or SSH tunnel, not the URL login
-  prints), show the code and wait for approval. Approving needs the user's own
-  panel login (made with its first device) or an admin login named like the
-  user (the device becomes an admin): say which before starting.
+- **`user self` on a later device (P3, S)**: `user self` still refuses a user
+  with a device and prints the manual steps; reuse `peer add`'s `link-client`
+  step (local `longarm login <hub> --ca-fingerprint`, approve at `/link`).
+- **Review shows an owned worker as "fleet worker" (P3, S)**: `peer add` /
+  `worker add` on a machine that is already enrolled as a user's owned worker
+  (all steps skip) still summarise `ownership: fleet worker … every user may
+  use it`. Read the node's owner from the hub and say "already owned by U".
+- **Host picker without git forges (P3, S)**: the worker/peer wizard and
+  completion list every `~/.ssh/config` Host, including `github.com`,
+  `gitlab.com` and aliases whose HostName is one; hide those (and
+  `longarm-<worker>` aliases, which are Longarm's own sshd).
 - **A reachable `/link` URL from `longarm login` (P3, S)**: the hub prints
   `public_url` + `/link`, else the gRPC host with the HTTP port, which fails
   for a loopback panel. Evaluate setting `public_url` from `hub panel-access`

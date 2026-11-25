@@ -75,7 +75,13 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   job records.
 - Peer add does the same, then enrolls the machine's `longarm` as client
   `<worker>-client` (client join code over ssh stdin) and runs `longarm ls`
-  there. Revoke with `longarm admin revoke <worker>-client`.
+  there. Revoke with `longarm admin revoke <client node>`. `--client-user`
+  defaults to your own user. When that user already has a device, the client
+  step is `longarm login <hub> --ca-fingerprint <fp>` there plus an approval
+  at the panel's `/link` (needs the user's terminal: with `--json` it stops
+  with the exact command; tell the user to run it and approve at `/link` via
+  `lazylongarm hub panel`). Never run a bare `longarm login` on a machine:
+  without the hub it signs in to the hub built into the release.
 - Colab workers are disposable: remove them when the work is done (`worker
   colab rm`), copy results off first (a reclaimed VM takes its jobs' output
   with it), and never use one as a network proxy (Colab forbids it).

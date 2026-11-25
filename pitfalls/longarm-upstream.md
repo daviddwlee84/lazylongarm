@@ -3,7 +3,7 @@
 | 症狀 | 原因 | lazylongarm 的處理 |
 |---|---|---|
 | `aka.ms/longarm` 的登入頁只出現「Microsoft (work or school)」 | 這是 Microsoft 內部 Hub（ACI，公司 Entra tenant）| 不用；自架 Hub，或公開 binary 預設的 `longarm.weavejam.com` |
-| `longarm login` 不帶參數時跑到 weavejam.com | 公開 release 建置時寫入 `LONGARM_DEFAULT_HUB` | 一律用 join code + `--ca-fingerprint` 加入自己的 Hub |
+| `longarm login` 不帶參數時跑到 weavejam.com，即使這台的 worker 已經登記在自架 hub | 公開 release 建置時寫入 `LONGARM_DEFAULT_HUB`；client 從沒登入過時 login 會用它，不讀 worker 的 `~/.longarm/hub.toml`，印出的 `/link` 代碼看起來完全正常 | 一律用 join code + `--ca-fingerprint` 加入自己的 Hub；`peer add` 的 `link-client` 跑 `longarm login <hub> --ca-fingerprint <fp>` |
 | 透過 SSH 抓 Hub 的 `install.sh` 給 worker 用，worker 卻下載失敗 | `HUB_URL` 取自 `public_url`，沒設時取 request 的 Host header（例如 127.0.0.1:7480）| 不用 install.sh；從 GitHub 下載並驗證 binary，再用 scp 推過去 |
 | `longarm-hub` service 起不來，state dir 裡有 root 擁有的檔案 | 用 root 執行了 `bootstrap`／`ca init` | 用 `runuser -u longarm-hub --` 執行 |
 | deb 安裝 `longarm` 後 join 失敗，但套件安裝回報成功 | `postinst.sh` 在 `longarmd join` 失敗時仍 exit 0 | 不走 postinst 路線；一律用 `worker ls --json` 確認 |
@@ -15,7 +15,7 @@
 | `longarm worker add` 回 `NotFound: no user "mac" (longarm admin user add mac)` | bootstrap 的 admin code 產生的 admin 憑證帶有 `user: "mac"`，但 Hub 的使用者表（multi-tenancy）裡沒有這個 user；owned worker 需要真的 user 紀錄 | 是 admin 就改用 `longarm admin join-code --role worker --name N` + `longarm admin approve N`（`--mint admin`，預設）|
 | 第一次 `admin user add` 之後，新使用者看得到、也能用我們的 worker | user separation 打開後，fleet worker（沒有 owner）對所有使用者開放 | `user invite` 在還有 fleet worker 時拒絕執行；先 `worker add --reenroll --owner <你>` |
 | worker 改成某個 user 的 owned worker 後，admin 憑證看不到也用不了它 | admin 對別人的 owned worker 沒有豁免；舊的 admin 憑證被當成同名的 user | `worker add --owner` 要求本機憑證的 user 就是 owner；先 `user self` |
-| `admin join-code --role client --user U` 被拒絕 | user-bound code 只給該 user 的第一台裝置；之後的裝置要 `longarm login` 再到 `/link` 核准 | `peer add` 在 U 已有裝置時直接說明替代步驟 |
+| `admin join-code --role client --user U` 被拒絕 | user-bound code 只給該 user 的第一台裝置；之後的裝置要 `longarm login` 再到 `/link` 核准 | `peer add` 在 U 已有裝置時改走 `link-client`：在那台跑 `longarm login <hub> --ca-fingerprint`，交出 terminal 等 `/link` 核准 |
 | `longarm admin user set U --panel` 回 `FailedPrecondition: U has machines already` | admin 幫 user 建的 panel login 只能用在還沒有機器的新 user（避免 admin 冒充 user） | 第一台裝置時就建（`user self` 預設 `--panel`）；事後只能在 hub 主機用 `lazylongarm hub panel-user U` 建同名的 admin 登入，核准的裝置會拿到 admin 憑證 |
 | `longarm login` 印出的 `http://<hub>:7480/link` 打不開 | hub 沒設 `public_url` 時，網址是 gRPC 的 host 加上 HTTP listener 的 port；panel 只綁 loopback 時這個網址從外面連不到 | 用 `lazylongarm hub panel` 打開 panel，自己到 `/link` |
 | user separation 打開後，`hub setup` 時建的 admin panel login 在 Nodes 頁看不到任何機器 | 名稱不是某個 user 的 admin 登入，會被當成同名的（空的）user | 用跟 user 同名的 admin 登入（`hub panel-user U`），或 user 自己的 panel login |
