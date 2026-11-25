@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -89,7 +90,7 @@ func TestApplyHomebrewUpdatesAndChecksTheResult(t *testing.T) {
 	if err := Apply(context.Background(), c, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	want := "brew update --quiet|brew upgrade " + Formula + "|brew list --versions " + Formula
+	want := "brew update --quiet|brew upgrade " + TapFormula + "|brew list --versions " + TapFormula
 	if got := strings.Join(*calls, "|"); got != want {
 		t.Fatalf("calls\n got %s\nwant %s", got, want)
 	}
@@ -101,5 +102,42 @@ func TestApplyHomebrewTapLagIsAnError(t *testing.T) {
 	err := Apply(context.Background(), c, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "still installs v0.4.3") {
 		t.Fatalf("want a tap-lag error, got %v", err)
+	}
+}
+
+func TestCheckJSON(t *testing.T) {
+	for _, tc := range []struct {
+		c    Check
+		want map[string]any // keys that must have these values
+		gone []string       // keys that must be absent
+	}{
+		{Check{Owner: OwnerHomebrew, Formula: TapFormula, Supported: true, Latest: "v0.5.0", UpToDate: true},
+			map[string]any{"formula": TapFormula, "supported": true, "apply_supported": true, "up_to_date": true}, nil},
+		{Check{Owner: OwnerHomebrew, Formula: TapFormula, Supported: true, Latest: "v0.5.0"},
+			map[string]any{"up_to_date": false}, nil},
+		// Latest unknown (e.g. GitHub rate limit): no guessed up_to_date.
+		{Check{Owner: OwnerHomebrew, Formula: TapFormula, Supported: true},
+			map[string]any{"supported": true}, []string{"up_to_date", "latest"}},
+		{Check{Owner: OwnerDev, Latest: "v0.5.0"},
+			map[string]any{"supported": false, "up_to_date": false}, []string{"formula"}},
+	} {
+		b, err := json.Marshal(tc.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range tc.want {
+			if got[k] != v {
+				t.Errorf("%s: %s = %v, want %v", b, k, got[k], v)
+			}
+		}
+		for _, k := range tc.gone {
+			if _, ok := got[k]; ok {
+				t.Errorf("%s: %s should be absent", b, k)
+			}
+		}
 	}
 }
