@@ -22,9 +22,9 @@ var ErrNoRelease = errors.New("no published release")
 
 // Source says where to look.
 type Source struct {
-	Repo      string         // owner/name
-	APIBase   string         // https://api.github.com
-	WebBase   string         // https://github.com
+	Repo      string // owner/name
+	APIBase   string // https://api.github.com
+	WebBase   string // https://github.com
 	UserAgent string
 	Client    *http.Client
 	Valid     *regexp.Regexp // accepted tag form
