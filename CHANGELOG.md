@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.1 — 2026-11-25
 
 - `upgrade` on a Homebrew install runs `brew update` before `brew upgrade`
   (brew skips its own auto-update for a while and then only warns "already
