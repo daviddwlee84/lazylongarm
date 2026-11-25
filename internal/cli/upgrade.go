@@ -14,8 +14,9 @@ func upgradeCommand(o *options) *cobra.Command {
 		Use:   "upgrade",
 		Short: "Check for or install a newer lazylongarm release",
 		Long: `Finds out who owns this executable and upgrades it the matching way:
-Homebrew → brew upgrade; release archive → download the same tag's archive,
-verify checksums.txt and replace this file; go install → build the tag with a
+Homebrew → brew update + brew upgrade (an error when the tap has not picked
+up the latest release yet); release archive → download the same tag's
+archive, verify checksums.txt and replace this file; go install → build the tag with a
 temporary GOBIN and replace this file. Local or modified builds are left alone.
 --check only reports. Upgrading lazylongarm does not touch Longarm itself.`,
 		Args: noArgs,
@@ -37,7 +38,7 @@ temporary GOBIN and replace this file. Local or modified builds are left alone.
 			if err != nil {
 				return err
 			}
-			if res.Owner != selfupdate.OwnerHomebrew && res.UpToDate {
+			if res.UpToDate {
 				fmt.Fprintf(cmd.OutOrStdout(), "lazylongarm %s is up to date\n", res.Current)
 				return nil
 			}
@@ -60,7 +61,7 @@ temporary GOBIN and replace this file. Local or modified builds are left alone.
 			if o.json {
 				return writeJSON(cmd.OutOrStdout(), map[string]any{"upgraded": true, "from": res.Current, "to": res.Latest, "owner": res.Owner})
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "lazylongarm upgraded (%s)\n", res.Owner)
+			fmt.Fprintf(cmd.OutOrStdout(), "lazylongarm upgraded %s → %s (%s)\n", res.Current, orDefault(res.Latest, "the version Homebrew offers"), res.Owner)
 			return nil
 		},
 	}
