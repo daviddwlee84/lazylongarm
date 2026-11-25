@@ -4,6 +4,21 @@ Shipped in the first slice: `hub setup` (apt + systemd + Azure NSG + local admin
 enrollment), `hub status|panel|panel-access|backup`, `worker add` (SSH or local; system or
 user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill.
 
+- **After Longarm's next release: adopt upstream #172 (P1, M)**: upstream
+  fixed #165/#166/#168 (merged, not yet released). Behaviour change: an admin
+  panel login named like a Longarm user no longer approves `/link` as that
+  user, and `longarm-hub user add` refuses one; a user makes a role-user panel
+  login from one of their devices with `longarm panel-login [--reset]`
+  (refused while an admin login of that name exists). Then:
+  `LinkApprover`/`LaterDeviceHint` and `peer add`'s `link-client` name
+  `longarm panel-login` instead of `hub panel-user <user>`; drop "the panel
+  login cannot be added later" from `user self --panel` (flag help, review
+  warning); `hub panel-user` refuses a Longarm user's name up front; drop "the
+  URL longarm login prints is wrong" (it now prints the loopback URL plus an
+  `ssh -L` hint, which works with `hub panel`'s tunnel); show `longarmd
+  doctor`'s macOS `ProcessType` warning in `fleet`; bump "Verified against".
+  Document the migration for hubs that relied on a same-named admin login
+  (add another admin login, remove the old one, `longarm panel-login`).
 - **Hub VM in the dashboard (P3, S)**: `hub vm` exists (status/start/stop/
   restart/delete); add Hub-tab actions and show the cost estimate there.
 - **"Create a dedicated hub VM" in the hub setup wizard (P3, L)**: automate a
@@ -43,7 +58,9 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   completion list every `~/.ssh/config` Host, including `github.com`,
   `gitlab.com` and aliases whose HostName is one; hide those (and
   `longarm-<worker>` aliases, which are Longarm's own sshd).
-- **A reachable `/link` URL from `longarm login` (P3, S)**: the hub prints
+- **A reachable `/link` URL from `longarm login` (P3, S)**: mostly solved
+  upstream by #172 (see the P1 item above); keep only if `public_url` from
+  `hub panel-access` still helps. The hub prints
   `public_url` + `/link`, else the gRPC host with the HTTP port, which fails
   for a loopback panel. Evaluate setting `public_url` from `hub panel-access`
   (tailnet/public); check what else it changes (install URLs, tailnet config).
