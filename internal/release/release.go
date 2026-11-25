@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/daviddwlee84/lazylongarm/internal/ghrelease"
 )
 
 // Repo is the upstream repository.
@@ -32,30 +33,7 @@ var (
 
 // Latest returns the newest published release tag.
 func Latest(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/repos/"+Repo+"/releases/latest", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "lazylongarm")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("query latest Longarm release: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("query latest Longarm release: HTTP %d", resp.StatusCode)
-	}
-	var body struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return "", err
-	}
-	if !tagRE.MatchString(body.TagName) {
-		return "", fmt.Errorf("unexpected release tag %q", body.TagName)
-	}
-	return body.TagName, nil
+	return ghrelease.Latest(ctx, ghrelease.Source{Repo: Repo, APIBase: apiBase, WebBase: downloadBase, UserAgent: "lazylongarm", Client: httpClient, Valid: tagRE})
 }
 
 // AssetName is the bare binary name for a component on a platform, e.g.
