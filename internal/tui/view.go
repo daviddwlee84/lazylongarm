@@ -650,6 +650,9 @@ func (m *Model) detailContent(w int) ([]string, int) {
 			}
 			lines = append(lines, m.kv("ssh host", r.SSHHost)+managed)
 		}
+		if r.Client != "" {
+			lines = append(lines, m.kv("client", r.Client)+t.Muted.Render("  peer: its longarm can dispatch to your workers"))
+		}
 		if !r.InHub {
 			lines = append(lines, "", t.Warn.Render("! Configured here but not in the hub registry."), t.Muted.Render("  Rerun: ")+"lazylongarm worker add "+r.SSHHost)
 		}

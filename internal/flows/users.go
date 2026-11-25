@@ -320,13 +320,20 @@ func RenderInvite(inv Invite) string {
 	return b.String()
 }
 
-// LaterDeviceHint says how a machine becomes another device of user, whose
-// first device exists: upstream issues user-bound codes for the first device
-// only, and refuses an admin's panel login for a user with machines.
-func LaterDeviceHint(user string, hasPanel bool) string {
+// LinkApprover says who can approve a later device of user at /link:
+// upstream refuses an admin's panel login for a user with machines, but treats
+// an admin panel login named like the user as that user.
+func LinkApprover(user string, hasPanel bool) string {
 	approve := fmt.Sprintf("an admin panel login named %s (`lazylongarm hub panel-user %s`, over SSH on the hub host; the approved device gets an admin certificate)", user, user)
 	if hasPanel {
 		approve = user + "'s panel login (a client certificate), or " + approve
 	}
-	return fmt.Sprintf("run `longarm login --no-browser` on that machine and approve its code at the panel's /link page (`lazylongarm hub panel`; the URL longarm login prints is wrong when the panel listens on loopback only) with %s; or issue a client certificate on the hub host (`longarm admin issue --role client --user %s`)", approve, user)
+	return approve
+}
+
+// LaterDeviceHint says how a machine becomes another device of user, whose
+// first device exists: upstream issues user-bound codes for the first device
+// only.
+func LaterDeviceHint(user string, hasPanel bool) string {
+	return fmt.Sprintf("run `longarm login <hub> --ca-fingerprint <sha256> --no-browser` on that machine (without the hub it signs in to the hub built into the release) and approve its code at the panel's /link page (`lazylongarm hub panel`; the URL longarm login prints is wrong when the panel listens on loopback only) with %s; for a worker, `lazylongarm peer add <host>` does this", LinkApprover(user, hasPanel))
 }

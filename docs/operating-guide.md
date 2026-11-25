@@ -144,8 +144,8 @@ order of the steps:
   users' owned workers.
 - A user-bound join code works for the user's **first device only**; later
   devices run `longarm login` and are approved at the panel's `/link` page
-  (see [Later devices](#later-devices)). `peer add --client-user U` refuses
-  once `U` has a device and says so.
+  (see [Later devices](#later-devices)). `peer add` does that for you once
+  the user has a device.
 
 | Step | Command | What happens |
 |---|---|---|
@@ -171,8 +171,12 @@ fleet workers and an admin certificate without a user record.
 Once a user has a device, a new machine of theirs signs in itself and is
 approved in a browser (upstream's pairing, like an OAuth device code):
 
-1. On the machine: `longarm login --no-browser`. It prints a `/link` URL and
-   an 8-character code, and waits up to 10 minutes.
+1. On the machine: `longarm login <hub> --ca-fingerprint <sha256> --no-browser`.
+   It prints a `/link` URL and an 8-character code, and waits up to 10
+   minutes. Always name the hub: without it, a machine whose `longarm` never
+   signed in picks the hub built into the release (upstream's), not the one
+   its worker uses, and prints a code that looks just as valid.
+   `peer add` runs this step with the hub and fingerprint filled in.
 2. Open the panel from a machine that reaches it (`lazylongarm hub panel`)
    and go to `/link` there: the URL `longarm login` prints is the gRPC host
    with the panel's port, which does not answer when the panel listens on
@@ -190,9 +194,7 @@ Who may approve, on a hub without an identity provider:
 So keep `--panel` on `user self` unless your later devices may be admins.
 An admin panel login that is not named like a user (the one `hub setup`
 suggests) acts as a user of its own name: once users are separated it sees
-none of your machines on the Nodes page. Without any panel, `longarm admin
-issue --role client --user U` on the hub host signs a client bundle to copy
-over (the key is made there, not on the device).
+none of your machines on the Nodes page.
 
 Sharing stays off: an admin allows it per user (`longarm admin user set
 alice --can-share`) and the owner shares one worker (`longarm worker share
@@ -209,16 +211,28 @@ run.
 | Choice | Meaning |
 |---|---|
 | Client name | the client node's name, default `<worker>-client` (node names are unique on the hub) |
-| `--client-user` | the Longarm user the certificate belongs to; required once the hub separates users |
+| `--client-user` | the Longarm user the client acts as once the hub separates users; default: this machine's own user (the review says so). Also a wizard field |
 
 - Needs an admin certificate (client codes come from `longarm admin
   join-code --role client`); they are issued without approval.
+- When the client user already has a device, a join code cannot be issued
+  (upstream issues user-bound codes for a user's first device only). The
+  `link-client` step runs `longarm login <hub> --ca-fingerprint <fp>
+  --no-browser --link` on the machine with the terminal handed over: approve
+  its code at `/link` (`lazylongarm hub panel` in another terminal) as the
+  login the review names (see [Later devices](#later-devices)). The hub names
+  the device (`<user>-<hostname>`), so `--client-name` is ignored, and an
+  admin panel login makes it an admin. Without a terminal (`--json`) the step
+  stops with the exact command to run.
+- The client steps check `longarm whoami` there: the user must be the client
+  user, and the node name is recorded (shown as `client` in the dashboard's
+  Details pane).
 - An existing client certificate for the same hub is kept; one for another hub
   stops the plan (`--reenroll` replaces it).
 - The client certificate lives in `~/.config/longarm` of the account jobs run
   as: any job on that machine can dispatch to every worker you can use. The
   review warns, and louder when the account is root-equivalent. Revoke with
-  `longarm admin revoke <worker>-client`.
+  `longarm admin revoke <client node name>`.
 
 ## Colab workers
 

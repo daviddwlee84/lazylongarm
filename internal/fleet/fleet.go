@@ -39,6 +39,9 @@ type Row struct {
 	LastSeen string  `json:"last_seen,omitempty"`
 	// Labels from the hub registry (worker add --label, plus os/arch).
 	Labels map[string]string `json:"labels,omitempty"`
+	// Client is the node name of the machine's own longarm when lazylongarm
+	// made it a peer (worker + client).
+	Client string `json:"client,omitempty"`
 }
 
 // LabelText is the labels as sorted k=v pairs, without os/arch (shown as the
@@ -93,10 +96,10 @@ func Merge(cfg *config.Config, nodes []longarm.Node) []Row {
 				name = t.ID
 			}
 			if r, ok := byName[name]; ok {
-				r.Managed, r.SSHHost = true, t.SSHHost
+				r.Managed, r.SSHHost, r.Client = true, t.SSHHost, t.ClientName
 				continue
 			}
-			byName[name] = &Row{Name: name, SSHHost: t.SSHHost, Managed: true, State: "not in hub", Platform: t.OS + "/" + t.Arch}
+			byName[name] = &Row{Name: name, SSHHost: t.SSHHost, Managed: true, State: "not in hub", Platform: t.OS + "/" + t.Arch, Client: t.ClientName}
 			order = append(order, name)
 		}
 	}
