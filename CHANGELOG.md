@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.3 — 2026-11-25
 
 - `peer add` handles a later device of a user: when the client user already
   has a device (upstream issues user-bound codes for a user's first device
