@@ -93,3 +93,8 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   prompt, so let the user run the apply in their terminal.
 - For jobs, use Longarm directly (`longarm run|jobs|logs|kill --json`); its
   `--json` output and exit codes are the stable contract (docs/programs.md).
+  `lazylongarm job run` is a form for humans (it hands the terminal to
+  `longarm run`); agents call `longarm run` themselves.
+- `worker ls` hides revoked workers (`--all` shows them; `--json` always
+  lists them). The hub keeps revoked records for good; there is nothing to
+  clean up.

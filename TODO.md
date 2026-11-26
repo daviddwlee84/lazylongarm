@@ -74,10 +74,17 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   `hub_job_details = false`) into `longarmd.toml`, `longarmd trust add-user`
   with the owner's key, and restart; refuse to pin a user this machine's
   certificate does not act as (it would lock you out).
-- **Revoke/remove from lazylongarm (P2, S)**: dashboard action + `worker remove`
-  wrapping `longarm admin revoke` / `worker remove`, then offer
-  `worker add --reenroll`; a guided "lost admin device" flow (mint an admin
-  code on the hub over SSH, enroll a new device, revoke the old one).
+- **Lost admin device (P2, S)**: the dashboard revokes workers (`X`); still
+  missing a guided "lost admin device" flow (mint an admin code on the hub
+  over SSH, enroll a new device, revoke the old one).
+- **Drain / undrain in the dashboard (P2, S)**: the panel can drain a worker
+  (`longarm admin drain|undrain`, admins); add the drain state to
+  `longarm.Node` (upstream shows `draining` in `worker ls`) and a Fleet
+  action, e.g. before a revoke or maintenance.
+- **Rename and labels in the dashboard (P3, S)**: a form over `longarm worker
+  rename` / `longarm worker label` (owner or admin), as the panel offers.
+  Panel features deliberately left to the web: users/tenants/teams, join-code
+  lists, toolchain profiles, audit, traffic and metric history.
 - **`hub uninstall` and `worker remove` (P2, M)**: stop/disable, `longarm worker
   remove`, delete only `lazylongarm-*` NSG rules, offer data deletion only
   after a backup.

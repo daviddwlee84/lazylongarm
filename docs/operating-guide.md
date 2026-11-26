@@ -8,6 +8,7 @@
 | `lazylongarm` without a terminal | help |
 | `hub setup` / `worker add` / `peer add` bare in a terminal | wizard |
 | `hub setup --host H --address A` / `worker add HOST` / `peer add HOST` / `user self USER` | same plan from flags; Review in a terminal, `--yes` otherwise |
+| `job run [worker] -c LINE` / `job run [worker] -- ARGV…` | submit a job (`--exec`: a short synchronous command); bare or `--interactive`: a form, then a review of the exact `longarm` command |
 | `user invite USER` / `user remove USER` | one confirmation in a terminal, `--yes` otherwise (`invite` also accepts `--out FILE`) |
 | `--interactive` with some flags | wizard prefilled from the flags |
 | partial flags (`hub setup --host H`) | usage error (exit 2), never a wizard |
@@ -319,9 +320,16 @@ half may already be gone) and refuses workers without the label.
 
 | Tab | Shows | Actions |
 |---|---|---|
-| 1 Fleet | hub registry merged with managed targets: state, CPU, memory; details add path (relay/direct), labels, last seen | `a` add worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles |
-| 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail that follows new output until you scroll up | `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
+| 1 Fleet | hub registry merged with managed targets: state, CPU, memory; details add path (relay/direct), labels, last seen. Revoked workers are hidden (`t` shows them) | `n` run a job on it (`job run`) · `a` add worker · `C` add a Colab worker · `P` add peer · `x`/Enter run `uname -a` · `s` `longarm ssh` · `R` register in hc/herdr · `D` dotfiles · `A` approve a pending node (admins) · `X` revoke (confirm; a Colab worker: `worker colab rm`, which also stops its VM) |
+| 2 Jobs | active jobs (and the last 30 min; `t` shows all) with a live log tail that follows new output until you scroll up; a multi-line command (a `bash -lc` script) is one row, shown in full above the log | `n` run a job (`job run`, worker `auto`) · `f` follow log (`longarm logs -f`) · `K` kill (confirm, `--if-created-at`) |
 | 3 Hub | hub profile, `hub status` checks (incl. panel logins), `longarm doctor` | `S` hub setup · `p` panel (tunnel on/off, or the tailnet/public URL) · `U` panel login · `A` panel access |
+
+The hub keeps revoked workers' records for good (they feed its revocation
+list), so there is nothing to delete; Fleet and `worker ls` hide them, like
+`longarm admin nodes` without `--all`.
+
+After `n`, the form returns to the Jobs tab with the new job selected (`exec`
+mode runs in the handed-over terminal and creates no job).
 
 Global: `1 2 3`/←→/h l tabs · ↑↓/j k select · `gg`/`G` · Tab focus the right
 pane (j/k, PgUp/PgDn scroll it) · `y` copy the job log, the details or the open

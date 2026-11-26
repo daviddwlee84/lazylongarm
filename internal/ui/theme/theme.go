@@ -157,10 +157,14 @@ func (t Theme) PrimaryText(label string, focused bool) string {
 // ButtonWidth is the cell width of ButtonText(label, …).
 func ButtonWidth(label string) int { return ansi.StringWidth(label) + 4 }
 
-// Fit truncates s to w cells and pads it with spaces to exactly w cells.
+// Fit truncates s to w cells and pads it with spaces to exactly w cells;
+// embedded newlines become ⏎ so the result is always one row.
 func Fit(s string, w int) string {
 	if w <= 0 {
 		return ""
+	}
+	if strings.ContainsAny(s, "\r\n") { // one screen row: an embedded newline would break the box
+		s = strings.NewReplacer("\r\n", "⏎", "\n", "⏎", "\r", "⏎").Replace(s)
 	}
 	s = ansi.Truncate(s, w, "…")
 	if pad := w - ansi.StringWidth(s); pad > 0 {

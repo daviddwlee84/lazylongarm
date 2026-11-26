@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/daviddwlee84/lazylongarm/internal/longarm"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
 	"github.com/daviddwlee84/lazylongarm/internal/release"
+	"github.com/daviddwlee84/lazylongarm/internal/wizard"
 	"github.com/spf13/cobra"
 )
 
@@ -61,9 +63,10 @@ func (o *options) colabDeps(h *config.Hub) (flows.ColabDeps, *longarm.Client, *c
 
 func workerColabAddCommand(o *options) *cobra.Command {
 	var (
-		req   flows.ColabWorkerRequest
-		hubID string
-		ao    applyOptions
+		req         flows.ColabWorkerRequest
+		hubID       string
+		ao          applyOptions
+		interactive bool
 	)
 	c := &cobra.Command{
 		Use:   "add [name]",
@@ -107,6 +110,14 @@ the steps already in place.`,
 			cancel()
 			if err != nil {
 				return fmt.Errorf("read your Colab balance (is the Colab CLI signed in? run `colab usage`): %w", err)
+			}
+			if interactive {
+				if !o.interactive(cmd) {
+					return usage("--interactive needs a terminal")
+				}
+				if err := colabAddForm(cmd, &req); err != nil {
+					return err
+				}
 			}
 			if req.Version == "" {
 				req.Version = h.Version
@@ -155,8 +166,44 @@ the steps already in place.`,
 	fl.StringArrayVar(&req.Labels, "label", nil, "extra worker label KEY=VALUE (repeatable; provider=colab and gpu= are set for you)")
 	fl.StringVar(&hubID, "hub", "", "hub id (default: the default hub)")
 	fl.StringVar(&req.Version, "longarm-version", "", "Longarm release tag to install (default: the hub's recorded version, else latest)")
+	fl.BoolVar(&interactive, "interactive", false, "ask for the name and machine shape in a form (prefilled from the flags)")
 	ao.bind(c)
 	return c
+}
+
+// colabAddForm asks for the worker name and the machine shape.
+func colabAddForm(cmd *cobra.Command, req *flows.ColabWorkerRequest) error {
+	gpu := req.GPU
+	if gpu == "" {
+		gpu = "cpu"
+	}
+	u := req.Usage
+	values, err := wizard.Edit(cmd.Context(), wizard.Spec{
+		Title:       "New Colab worker",
+		Description: fmt.Sprintf("Balance %.1f compute units · %d VMs running (%.2f units/h). The VM bills until you remove it (X in the dashboard, or worker colab rm).", u.Balance, u.Active, u.RatePerHour),
+		SubmitLabel: "Plan",
+		Fields: []wizard.Field{
+			{Key: "name", Label: "Worker name", Value: req.Name, Required: true, Help: "also the Colab session's name"},
+			{Key: "gpu", Label: "Accelerator", Kind: wizard.Select, Value: gpu, Options: []wizard.Choice{
+				{Value: "cpu", Label: "CPU runtime (cheapest)"},
+				{Value: "T4", Label: "T4"}, {Value: "L4", Label: "L4"}, {Value: "G4", Label: "G4"},
+				{Value: "A100", Label: "A100"}, {Value: "H100", Label: "H100"},
+			}, Help: "availability depends on your Colab plan"},
+			{Key: "highmem", Label: "High RAM", Kind: wizard.Toggle, Value: fmt.Sprint(req.HighMem), Options: []wizard.Choice{
+				{Value: "false", Label: "no — standard shape"}, {Value: "true", Label: "yes — high-RAM shape (paid plans)"},
+			}},
+		},
+	}, cmd.InOrStdin(), cmd.OutOrStdout())
+	if err != nil {
+		return err
+	}
+	req.Name = strings.TrimSpace(values["name"])
+	req.GPU = values["gpu"]
+	if req.GPU == "cpu" {
+		req.GPU = ""
+	}
+	req.HighMem = values["highmem"] == "true"
+	return nil
 }
 
 func workerColabRemoveCommand(o *options) *cobra.Command {

@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -387,6 +389,7 @@ func TestEverySizeRendersWithinBounds(t *testing.T) {
 		func(m *Model) { m.Update(key("?")) },
 		func(m *Model) { m.Update(key("2")); m.Update(key("K")) },
 		func(m *Model) { m.Update(key("tab")) },
+		func(m *Model) { m.Update(key("2")); m.Update(key("t")); m.Update(key("G")) },
 	} {
 		for w := 20; w <= 140; w += 7 {
 			for h := 8; h <= 44; h += 5 {
@@ -408,5 +411,170 @@ func TestEverySizeRendersWithinBounds(t *testing.T) {
 				m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
 			}
 		}
+	}
+}
+
+// A job whose command is a multi-line script (bash -lc "a\nb") stays one
+// list row, the panes stay aligned, and the full script is in the details.
+func TestMultilineCommandKeepsLayout(t *testing.T) {
+	m := demoModel(false, 120, 32)
+	m.Update(key("2"))
+	m.Update(key("t"))
+	m.Update(key("G"))
+	if j, ok := m.selectedJob(); !ok || j.Job.Spec.ID != "j-5c4b3a2918" {
+		t.Fatalf("selected %+v", j)
+	}
+	lines := strings.Split(viewText(m), "\n")
+	if len(lines) != 32 {
+		t.Fatalf("%d lines", len(lines))
+	}
+	l := m.layout()
+	split := l.detail.X // the detail pane's left border column
+	for y := l.list.Y; y < l.list.Y+l.list.H; y++ {
+		r := []rune(ansi.Strip(lines[y]))
+		if len(r) <= split || !strings.ContainsRune("│╭╰", r[split]) {
+			t.Fatalf("row %d: detail border not at column %d: %q", y, split, string(r))
+		}
+	}
+	text := viewText(m)
+	if strings.Contains(text, "pwned") || strings.Contains(text, "\x1b]") {
+		t.Fatal("terminal escape from the job's argv reached the screen")
+	}
+	if !strings.Contains(text, "set -u ⏎ export PATH") {
+		t.Fatal("the list row does not show the script on one line")
+	}
+	all, _ := m.detailContent(100)
+	joined := ansi.Strip(strings.Join(all, "\n"))
+	if !strings.Contains(joined, "── command (5 lines)") || !strings.Contains(joined, "\nexport PATH=$HOME/.cargo/bin:$PATH\n") {
+		t.Fatalf("details lack the full script:\n%s", joined)
+	}
+}
+
+func fleetModel(t *testing.T) *Model {
+	t.Helper()
+	m := newModel()
+	m.opts.RunCommand = func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }
+	m.whoami = &longarm.WhoAmI{Name: "laptop", Role: "admin"}
+	m.refreshGen = 1
+	m.Update(refreshMsg{gen: 1, nodes: []longarm.Node{
+		{Name: "live", Role: "worker", State: "approved", Online: true},
+		{Name: "colab-1", Role: "worker", State: "approved", Online: true, Labels: map[string]string{"provider": "colab"}},
+		{Name: "waiting", Role: "worker", State: "pending"},
+		{Name: "gone-1", Role: "worker", State: "revoked"},
+		{Name: "gone-2", Role: "worker", State: "revoked", Labels: map[string]string{"provider": "colab"}},
+	}})
+	return m
+}
+
+func enabledActions(m *Model) map[string]string {
+	out := map[string]string{}
+	for _, a := range m.actions() {
+		if a.enabled {
+			out[a.id] = a.label
+		}
+	}
+	return out
+}
+
+func TestRevokedWorkersHiddenUntilToggled(t *testing.T) {
+	m := fleetModel(t)
+	if got := m.ids(); len(got) != 3 {
+		t.Fatalf("visible %v", got)
+	}
+	text := viewText(m)
+	if strings.Contains(text, "gone-1") || !strings.Contains(text, "Fleet (3)") || !strings.Contains(text, "2 revoked hidden") {
+		t.Fatalf("revoked shown by default:\n%s", text)
+	}
+	if enabledActions(m)["revoked"] != "show revoked (2)" {
+		t.Fatalf("toggle: %v", enabledActions(m))
+	}
+	m.Update(key("t"))
+	if text := viewText(m); !strings.Contains(text, "gone-1") || !strings.Contains(text, "Fleet (5)") {
+		t.Fatalf("t does not show revoked:\n%s", text)
+	}
+	m.selected[tabFleet] = "gone-2"
+	if e := enabledActions(m); e["remove"] != "" || e["run"] != "" {
+		t.Fatalf("a revoked row offers %v", e)
+	}
+	m.Update(key("t")) // hiding again moves the selection off the revoked row
+	if r, ok := m.selectedRow(); !ok || r.State == "revoked" {
+		t.Fatalf("selection %+v %v", r, ok)
+	}
+}
+
+func TestAllRevokedShowsHowToSeeThem(t *testing.T) {
+	m := newModel()
+	m.refreshGen = 1
+	m.Update(refreshMsg{gen: 1, nodes: []longarm.Node{{Name: "gone", Role: "worker", State: "revoked"}}})
+	if text := viewText(m); !strings.Contains(text, "No live workers.") || !strings.Contains(text, "1 revoked; t shows them") {
+		t.Fatalf("empty state:\n%s", text)
+	}
+}
+
+func TestFleetWriteActions(t *testing.T) {
+	m := fleetModel(t)
+	m.selected[tabFleet] = "live"
+	e := enabledActions(m)
+	if e["run"] == "" || e["colab"] == "" || e["remove"] != "revoke" || e["approve"] != "" {
+		t.Fatalf("live row: %v", e)
+	}
+	m.Update(key("X"))
+	if m.overlay != "confirm" || m.confirm.button != "Revoke" || m.confirmFocus != 1 {
+		t.Fatalf("X on a worker: overlay %q %+v", m.overlay, m.confirm)
+	}
+	m.Update(key("esc"))
+	if m.overlay != "" {
+		t.Fatal("Esc did not cancel")
+	}
+
+	m.selected[tabFleet] = "colab-1"
+	if e := enabledActions(m); e["remove"] != "remove Colab worker" {
+		t.Fatalf("colab row: %v", e)
+	}
+	m.Update(key("X")) // its own reviewed flow: a terminal handoff, no modal
+	if m.overlay != "" || !m.toolBusy || !strings.Contains(m.status, "Remove Colab worker colab-1") {
+		t.Fatalf("X on a Colab worker: overlay %q busy %v status %q", m.overlay, m.toolBusy, m.status)
+	}
+	m.Update(toolDoneMsg{label: "Remove Colab worker colab-1"})
+
+	m.selected[tabFleet] = "waiting"
+	if e := enabledActions(m); e["approve"] == "" || e["run"] != "" {
+		t.Fatalf("pending row (admin): %v", e)
+	}
+	m.whoami.Role = "user"
+	if e := enabledActions(m); e["approve"] != "" {
+		t.Fatalf("pending row (user): %v", e)
+	}
+}
+
+func TestRunJobSelectsTheNewJob(t *testing.T) {
+	m := fleetModel(t)
+	m.selected[tabFleet] = "live"
+	m.Update(key("n"))
+	if !m.toolBusy || m.jumpSince.IsZero() {
+		t.Fatalf("n: busy %v jumpSince %v", m.toolBusy, m.jumpSince)
+	}
+	m.Update(toolDoneMsg{label: "Run job"})
+	now := time.Now()
+	gen := m.refreshGen
+	m.Update(refreshMsg{gen: gen, nodes: nodes("live"), jobs: []longarm.FleetJob{
+		{Worker: "live", Job: longarm.Job{State: "JOB_STATE_SUCCEEDED", CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), EndedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), Spec: longarm.JobSpec{ID: "old"}}},
+		{Worker: "live", Job: longarm.Job{State: "JOB_STATE_RUNNING", CreatedAt: now.Format(time.RFC3339Nano), Spec: longarm.JobSpec{ID: "new"}}},
+	}})
+	if j, ok := m.selectedJob(); m.tab != tabJobs || !ok || j.Job.Spec.ID != "new" || !m.jumpSince.IsZero() {
+		t.Fatalf("tab %d selected %+v", m.tab, j)
+	}
+}
+
+func TestCanceledRunJobStaysPut(t *testing.T) {
+	m := fleetModel(t)
+	m.selected[tabFleet] = "live"
+	m.Update(key("n"))
+	m.Update(toolDoneMsg{label: "Run job", err: errString("wizard canceled")})
+	m.Update(refreshMsg{gen: m.refreshGen, nodes: nodes("live"), jobs: []longarm.FleetJob{
+		{Worker: "live", Job: longarm.Job{State: "JOB_STATE_RUNNING", CreatedAt: time.Now().Format(time.RFC3339Nano), Spec: longarm.JobSpec{ID: "other"}}},
+	}})
+	if m.tab != tabFleet {
+		t.Fatal("a canceled form switched tabs")
 	}
 }

@@ -42,6 +42,8 @@ func demoModel(color bool, w, h int) *Model {
 			{Worker: "build-box", WorkerOnline: true, Job: longarm.Job{State: "JOB_STATE_RUNNING", CreatedAt: ts(4 * time.Minute), StartedAt: ts(4 * time.Minute), Spec: longarm.JobSpec{ID: "j-7f3a9c21d0", Name: "nightly-tests", Argv: []string{"make", "test"}, Owner: "alice"}}},
 			{Worker: "gpu-01", WorkerOnline: true, Job: longarm.Job{State: "JOB_STATE_FAILED", HasExitCode: true, ExitCode: 2, CreatedAt: ts(9 * time.Minute), StartedAt: ts(9 * time.Minute), EndedAt: ts(7 * time.Minute), Spec: longarm.JobSpec{ID: "j-1b2c3d4e5f", Argv: []string{"python", "train.py", "--epochs", "3"}, Owner: "alice"}}},
 			{Worker: "build-box", WorkerOnline: true, Job: longarm.Job{State: "JOB_STATE_SUCCEEDED", HasExitCode: true, CreatedAt: ts(15 * time.Minute), StartedAt: ts(15 * time.Minute), EndedAt: ts(14 * time.Minute), Spec: longarm.JobSpec{ID: "j-9a8b7c6d5e", Argv: []string{"uname", "-a"}, Owner: "alice"}}},
+			// An old job (hidden until t) whose command is a multi-line script.
+			{Worker: "build-box", WorkerOnline: true, Job: longarm.Job{State: "JOB_STATE_SUCCEEDED", HasExitCode: true, CreatedAt: ts(3 * time.Hour), StartedAt: ts(3 * time.Hour), EndedAt: ts(2 * time.Hour), Spec: longarm.JobSpec{ID: "j-5c4b3a2918", Argv: []string{"bash", "-lc", "set -u\nexport PATH=$HOME/.cargo/bin:$PATH\nW=$HOME/work/app\ncd $W && git fetch -q origin\n\tcargo test --workspace\x1b]0;pwned\x07"}, Owner: "alice"}}},
 		}})
 	var log strings.Builder
 	for i := 1; i <= 40; i++ {
@@ -74,6 +76,7 @@ func TestSnapshots(t *testing.T) {
 				"fleet":        func(m *Model) {},
 				"fleet-detail": func(m *Model) { m.Update(key("j")); m.Update(key("tab")) },
 				"jobs":         func(m *Model) { m.Update(key("2")) },
+				"jobs-old":     func(m *Model) { m.Update(key("2")); m.Update(key("t")); m.Update(key("G")) },
 				"hub":          func(m *Model) { m.Update(key("3")) },
 				"help":         func(m *Model) { m.Update(key("?")) },
 				"kill-confirm": func(m *Model) { m.Update(key("2")); m.Update(key("K")) },

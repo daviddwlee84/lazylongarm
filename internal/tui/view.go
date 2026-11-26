@@ -304,7 +304,7 @@ func (m *Model) tabLabel(i int) string {
 	n := tabNames[i]
 	switch i {
 	case tabFleet:
-		return fmt.Sprintf(" %d %s (%d) ", i+1, n, len(m.rows))
+		return fmt.Sprintf(" %d %s (%d) ", i+1, n, len(m.visibleRows()))
 	case tabJobs:
 		active := 0
 		for _, j := range m.jobs {
@@ -441,23 +441,30 @@ func (m *Model) listContent(l layout) (string, []string) {
 		}
 		return "Hub " + m.hub.ID, m.hubInfoLines()
 	case tabFleet:
-		if len(m.rows) == 0 {
+		rows := m.visibleRows()
+		title := "Workers"
+		if n := m.revokedCount(); n > 0 && !m.showRevoked {
+			title = fmt.Sprintf("Workers · %d revoked hidden (t)", n)
+		}
+		if len(rows) == 0 {
 			switch {
 			case m.hub == nil:
 				return "Workers", []string{"", t.Bold.Render("No hub yet."), t.Muted.Render("Press ") + key("3") + t.Muted.Render(" (Hub), then ") + key("S") + t.Muted.Render(" to run hub setup.")}
 			case m.refreshing && m.lastOK.IsZero():
 				return "Workers", []string{"", t.Pending.Render("loading workers…")}
+			case len(m.rows) > 0:
+				return title, []string{"", t.Bold.Render("No live workers."), t.Muted.Render(fmt.Sprintf("%d revoked; ", len(m.rows))) + key("t") + t.Muted.Render(" shows them; ") + key("a") + t.Muted.Render(" adds a worker.")}
 			}
 			return "Workers", []string{"", t.Bold.Render("No workers yet."), t.Muted.Render("Press ") + key("a") + t.Muted.Render(" to add one (an SSH host or this machine).")}
 		}
 		cols := fleetColumns(in.W)
 		lines := []string{t.Muted.Render(cols.header())}
 		sel := m.selected[tabFleet]
-		for i := l.listOff; i < min(len(m.rows), l.listOff+l.listRows); i++ {
-			r := m.rows[i]
+		for i := l.listOff; i < min(len(rows), l.listOff+l.listRows); i++ {
+			r := rows[i]
 			lines = append(lines, m.fleetRow(r, cols, in.W, r.Name == sel))
 		}
-		return "Workers", lines
+		return title, lines
 	case tabJobs:
 		jobs := m.visibleJobs()
 		if len(jobs) == 0 {
@@ -476,9 +483,9 @@ func (m *Model) listContent(l layout) (string, []string) {
 		now := time.Now()
 		for i := l.listOff; i < min(len(jobs), l.listOff+l.listRows); i++ {
 			j := jobs[i]
-			name := j.Job.Spec.Name
+			name := oneLine(j.Job.Spec.Name)
 			if name == "" {
-				name = strings.Join(j.Job.Spec.Argv, " ")
+				name = oneLine(strings.Join(j.Job.Spec.Argv, " "))
 			}
 			p := m.painter(j.Job.Spec.ID+"@"+j.Job.CreatedAt == sel)
 			st := j.Job.ShortState()
@@ -672,32 +679,54 @@ func (m *Model) detailContent(w int) ([]string, int) {
 			return nil, 0
 		}
 		jb := j.Job
+		command := strings.Join(jb.Spec.Argv, " ")
 		exit := "-"
 		if jb.HasExitCode {
 			exit = fmt.Sprint(jb.ExitCode)
 		}
-		title := jb.Spec.Name
+		title := oneLine(jb.Spec.Name)
 		if title == "" {
-			title = clip(strings.Join(jb.Spec.Argv, " "), max(10, w/2))
+			title = clip(oneLine(strings.Join(jb.Spec.Argv, " ")), max(10, w/2))
 		}
-		worker := j.Worker
+		worker := oneLine(j.Worker)
 		if !j.WorkerOnline {
 			worker += t.Err.Render(" (offline)")
+		}
+		// A multi-line or long command (a `bash -lc` script) is shown in full
+		// below the pinned header, before the log: the log's tail follow
+		// scrolls it out of the way and scrolling up shows it.
+		rule := func(label string) string {
+			return t.Muted.Render(label + strings.Repeat("─", max(0, w-ansi.StringWidth(label))))
+		}
+		var script []string
+		if s := strings.Split(strings.TrimRight(connection.Sanitize(command), "\n"), "\n"); len(s) > 1 || ansi.StringWidth(command) > w-12 {
+			script = s
+		}
+		logRule := rule("── log ")
+		if script != nil { // the scrolled part starts with its own command and log rules
+			logRule = rule("")
 		}
 		lines := []string{
 			t.Bold.Render(dash(title)) + "  " + t.Status(jb.ShortState()).Render(jb.ShortState()),
 			"",
 			m.kv("id", jb.Spec.ID),
 			m.kv("worker", worker),
-			m.kv("command", strings.Join(jb.Spec.Argv, " ")),
-			m.kv("owner", jb.Spec.Owner),
+			m.kv("command", clip(oneLine(command), max(10, w-12))),
+			m.kv("owner", oneLine(jb.Spec.Owner)),
 			m.kv("started", m.when(jb.StartedAt)),
 			m.kv("duration", jb.Duration(time.Now()).String()),
 			m.kv("exit", strings.TrimSpace(exit+" "+jb.Reason)),
 			"",
-			t.Muted.Render("── log " + strings.Repeat("─", max(0, w-7))),
+			logRule,
 		}
 		pin := len(lines)
+		if script != nil {
+			lines = append(lines, rule(fmt.Sprintf("── command (%s) ", plural(len(script), "line"))))
+			for _, l := range script {
+				lines = append(lines, strings.ReplaceAll(l, "\t", "    "))
+			}
+			lines = append(lines, rule("── log "))
+		}
 		st, have := m.logs[jb.Spec.ID]
 		switch {
 		case !have || (st.pending && st.text == ""):
@@ -796,7 +825,8 @@ func (m *Model) helpLines() []string {
 		"  drag over the right pane to copy whole lines (log, details)",
 		"  "+t.Muted.Render("while the mouse is on, Shift- or Option-drag selects text natively"),
 		"", t.Accent.Render("Symbols"),
-		"  "+t.OK.Render("●")+" online  "+t.Err.Render("●")+" offline  "+t.Warn.Render("◐")+" pending approval  "+t.Muted.Render("○")+" configured here, not in hub",
+		"  "+t.OK.Render("●")+" online  "+t.Err.Render("●")+" offline / revoked  "+t.Warn.Render("◐")+" pending approval  "+t.Muted.Render("○")+" configured here, not in hub",
+		"  "+t.Muted.Render("Revoked workers stay in the hub's registry for good; Fleet hides them until t."),
 		"  "+t.Muted.Render("Wizards (a, P, S) and longarm commands (s, f) take over the"),
 		"  "+t.Muted.Render("terminal and return here."),
 	)
@@ -879,6 +909,18 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// oneLine makes text from the hub (job names and commands, which other users
+// may have written) safe for one screen row: terminal escapes are stripped
+// and line breaks become ⏎.
+func oneLine(s string) string {
+	s = connection.Sanitize(s)
+	if !strings.ContainsAny(s, "\r\n\t") {
+		return s
+	}
+	s = strings.NewReplacer("\r\n", " ⏎ ", "\n", " ⏎ ", "\r", " ⏎ ", "\t", " ").Replace(s)
+	return strings.TrimSuffix(s, " ⏎ ")
 }
 
 func clip(s string, n int) string {

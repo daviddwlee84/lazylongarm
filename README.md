@@ -158,8 +158,9 @@ back with `longarm admin revoke <worker>-client`.
 | `worker add [host] \| --local` | bootstrap a worker (wizard, or flags; `--fetch auto\|push\|remote`) |
 | `peer add [host] \| --local` | a worker whose own longarm is also enrolled as a client (`--client-name`, `--client-user`) |
 | `worker add HOST --reenroll --owner USER` | move a fleet worker to a Longarm user (new owner code, old node revoked, service restarted, labels kept) |
-| `worker ls` | hub registry merged with machines lazylongarm manages (OWNER: a user, or `fleet`) |
-| `worker colab add [name] [--gpu T4] [--high-mem]` | borrow a Google Colab VM as a temporary worker owned by you (Colab CLI; needs a positive compute-unit balance) |
+| `worker ls [--all]` | hub registry merged with machines lazylongarm manages (OWNER: a user, or `fleet`); revoked workers only with `--all` |
+| `job run [worker] [-c LINE \| -- ARGV…] [--exec]` | submit a job (or a short `longarm exec`) after reviewing the exact command; bare: a form (worker or `auto`, mode, command line run with `sh -c`) |
+| `worker colab add [name] [--gpu T4] [--high-mem] [--interactive]` | borrow a Google Colab VM as a temporary worker owned by you (Colab CLI; needs a positive compute-unit balance) |
 | `worker colab ls` / `worker colab rm NAME` | Colab sessions joined with `provider=colab` workers and your balance; revoke a Colab worker and stop its VM |
 | `user self USER [--device D]` | create your Longarm user and switch this machine to an admin certificate of it (old one backed up; panel login for `/link`) |
 | `user invite USER [--out FILE]` | add a user and write an invite with install, join and worker steps; refuses while fleet workers exist |
