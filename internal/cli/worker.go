@@ -480,9 +480,12 @@ func splitLabels(s string) []string {
 // ---- worker ls ----
 
 func workerListCommand(o *options) *cobra.Command {
-	var hubID string
+	var (
+		hubID string
+		all   bool
+	)
 	c := &cobra.Command{
-		Use: "ls", Short: "List workers: the hub's registry merged with machines lazylongarm manages", Args: noArgs,
+		Use: "ls", Short: "List workers: the hub's registry merged with machines lazylongarm manages (--all: revoked ones too)", Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			h, err := o.requireHub(hubID)
 			if err != nil {
@@ -503,6 +506,21 @@ func workerListCommand(o *options) *cobra.Command {
 			if lerr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "! hub registry unavailable: %v\n", lerr)
 			}
+			hidden := 0
+			if !all { // the hub keeps revoked records for good; --json lists them all
+				live := rows[:0:0]
+				for _, r := range rows {
+					if r.State == "revoked" {
+						hidden++
+					} else {
+						live = append(live, r)
+					}
+				}
+				rows = live
+			}
+			if hidden > 0 {
+				defer fmt.Fprintf(cmd.ErrOrStderr(), "(%s hidden; --all shows them)\n", plural(hidden, "revoked worker"))
+			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "WORKER\tSTATE\tOWNER\tPATH\tPLATFORM\tCPU%\tMEM%\tJOBS\tSSH\tVERSION\tLABELS")
 			for _, r := range rows {
@@ -516,5 +534,6 @@ func workerListCommand(o *options) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&hubID, "hub", "", "hub id")
+	c.Flags().BoolVar(&all, "all", false, "include revoked workers (the hub keeps their records)")
 	return c
 }

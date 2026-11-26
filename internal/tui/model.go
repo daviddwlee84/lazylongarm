@@ -73,15 +73,19 @@ type Model struct {
 	press         *press
 	drag          *drag
 
-	rows       []fleet.Row
-	jobs       []longarm.FleetJob
-	showDone   bool
-	selected   [3]string // stable id per tab
-	refreshGen uint64
-	refreshing bool
-	lastOK     time.Time
-	refreshErr string
-	whoami     *longarm.WhoAmI
+	rows     []fleet.Row
+	jobs     []longarm.FleetJob
+	showDone bool
+	// showRevoked lists revoked workers too. The hub keeps their records for
+	// good (they drive its revocation list), so they are hidden by default,
+	// like `longarm admin nodes` without --all.
+	showRevoked bool
+	selected    [3]string // stable id per tab
+	refreshGen  uint64
+	refreshing  bool
+	lastOK      time.Time
+	refreshErr  string
+	whoami      *longarm.WhoAmI
 
 	hubChecks  []fleet.HubCheck
 	hubGen     uint64
@@ -98,6 +102,11 @@ type Model struct {
 	panelPending bool
 	panelNote    string // why the tunnel was used instead of the tailnet URL
 	quitting     bool
+
+	// jumpSince is set while `job run` has the terminal: the first refresh
+	// after it returns selects a job created since then on the Jobs tab.
+	jumpSince time.Time
+	jumpReady bool
 }
 
 type logState struct {
@@ -293,6 +302,23 @@ func (m *Model) kill(j longarm.FleetJob) tea.Cmd {
 	}
 }
 
+// nodeOpMsg is the result of a worker operation run in the background
+// (revoke, approve).
+type nodeOpMsg struct {
+	verb, name string
+	err        error
+}
+
+func (m *Model) nodeOp(verb, name string, op func(context.Context, string) error) tea.Cmd {
+	m.setStatus("pending", verb+" "+name+"…")
+	ctx := m.opts.Ctx
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		return nodeOpMsg{verb: verb, name: name, err: op(c, name)}
+	}
+}
+
 type panelMsg struct {
 	t   *connection.Tunnel
 	err error
@@ -406,6 +432,47 @@ func (m *Model) runTool(label string, args ...string) tea.Cmd {
 	return tea.Exec(task, func(err error) tea.Msg { return toolDoneMsg{label: label, err: err} })
 }
 
+// runJob opens the `job run` form (worker preselected; "" = auto) and, when
+// it submitted a job, shows that job on return.
+func (m *Model) runJob(worker string) tea.Cmd {
+	args := []string{"job", "run", "--interactive"}
+	if worker != "" {
+		args = append(args, worker)
+	}
+	cmd := m.runTool("Run job", args...)
+	if cmd != nil {
+		m.jumpSince, m.jumpReady = time.Now().Add(-time.Minute), false // allow for clock skew with the hub
+	}
+	return cmd
+}
+
+// jumpToNewJob selects the newest job created since jumpSince, if any.
+func (m *Model) jumpToNewJob() tea.Cmd {
+	since := m.jumpSince
+	m.jumpSince, m.jumpReady = time.Time{}, false
+	var best *longarm.FleetJob
+	for i, j := range m.jobs {
+		t, err := time.Parse(time.RFC3339Nano, j.Job.CreatedAt)
+		if err != nil || t.Before(since) {
+			continue
+		}
+		if best == nil || j.Job.CreatedAt > best.Job.CreatedAt {
+			best = &m.jobs[i]
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	id := best.Job.Spec.ID + "@" + best.Job.CreatedAt
+	cmd := m.switchTab(tabJobs)
+	m.selected[tabJobs] = id
+	if _, ok := m.selectedJob(); !ok { // finished long ago already: show old jobs
+		m.showDone = true
+		m.selected[tabJobs] = id
+	}
+	return tea.Batch(cmd, m.scheduleLog())
+}
+
 // runProcess hands the terminal to a longarm subcommand (ssh, logs -f).
 func (m *Model) runProcess(label string, args ...string) tea.Cmd {
 	if m.toolBusy {
@@ -490,6 +557,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshErr = strings.Join(errs, "; ")
 		}
 		m.clampSelection()
+		if m.jumpReady && msg.jobsErr == nil {
+			return m, m.jumpToNewJob()
+		}
 		if m.tab == tabJobs {
 			if j, ok := m.selectedJob(); ok {
 				if _, have := m.logs[j.Job.Spec.ID]; !have {
@@ -537,6 +607,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("ok", "killed "+short(msg.id))
 		}
 		return m, m.refresh()
+	case nodeOpMsg:
+		if msg.err != nil {
+			m.setStatus("err", msg.verb+" "+msg.name+": "+shortErr(msg.err))
+		} else {
+			m.setStatus("ok", msg.verb+" "+msg.name+": done")
+		}
+		m.refreshing = false
+		return m, m.refresh()
 	case panelMsg:
 		m.panelPending = false
 		if msg.err != nil {
@@ -570,6 +648,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case toolDoneMsg:
 		m.toolBusy = false
+		if !m.jumpSince.IsZero() {
+			m.jumpReady = msg.err == nil
+			if msg.err != nil {
+				m.jumpSince = time.Time{}
+			}
+		}
 		switch {
 		case msg.err == nil:
 			m.setStatus("ok", msg.label+": done")
@@ -772,8 +856,9 @@ func (m *Model) afterMove() tea.Cmd {
 func (m *Model) ids() []string {
 	switch m.tab {
 	case tabFleet:
-		out := make([]string, len(m.rows))
-		for i, r := range m.rows {
+		rows := m.visibleRows()
+		out := make([]string, len(rows))
+		for i, r := range rows {
 			out[i] = r.Name
 		}
 		return out
@@ -826,12 +911,37 @@ func (m *Model) clampSelection() {
 }
 
 func (m *Model) selectedRow() (fleet.Row, bool) {
-	for _, r := range m.rows {
+	for _, r := range m.visibleRows() {
 		if r.Name == m.selected[tabFleet] {
 			return r, true
 		}
 	}
 	return fleet.Row{}, false
+}
+
+// visibleRows are the Fleet rows shown: revoked workers only with t.
+func (m *Model) visibleRows() []fleet.Row {
+	if m.showRevoked {
+		return m.rows
+	}
+	var out []fleet.Row
+	for _, r := range m.rows {
+		if r.State != "revoked" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// revokedCount is how many Fleet rows are revoked workers.
+func (m *Model) revokedCount() int {
+	n := 0
+	for _, r := range m.rows {
+		if r.State == "revoked" {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Model) visibleJobs() []longarm.FleetJob {
@@ -886,8 +996,16 @@ func (m *Model) actions() []action {
 	switch m.tab {
 	case tabFleet:
 		row, ok := m.selectedRow()
+		live := ok && row.InHub && row.State != "revoked"
+		colabRow := live && row.Labels["provider"] == "colab"
+		admin := m.whoami != nil && m.whoami.Role == "admin"
+		revoked := m.revokedCount()
 		out = append(out,
+			action{"run", "run job", []string{"n"}, live && row.Online && !m.toolBusy, func() tea.Cmd { return m.runJob(row.Name) }},
 			action{"add", "add worker", []string{"a"}, hasHub && !m.toolBusy, func() tea.Cmd { return m.runTool("Add worker", "worker", "add") }},
+			action{"colab", "add Colab worker", []string{"C"}, hasHub && !m.toolBusy, func() tea.Cmd {
+				return m.runTool("Add Colab worker", "worker", "colab", "add", "--interactive")
+			}},
 			action{"peer", "add peer (worker + client)", []string{"P"}, hasHub && !m.toolBusy, func() tea.Cmd { return m.runTool("Add peer", "peer", "add") }},
 			action{"try", "try uname", []string{"x", "enter"}, ok && row.Online, func() tea.Cmd { return m.tryWorker(row.Name) }},
 			action{"ssh", "longarm ssh", []string{"s"}, ok && row.InHub && !m.toolBusy, func() tea.Cmd { return m.runProcess("longarm ssh "+row.Name, "ssh", row.Name) }},
@@ -897,10 +1015,43 @@ func (m *Model) actions() []action {
 			action{"dotfiles", "dotfiles", []string{"D"}, ok && row.SSHHost != "" && !m.toolBusy, func() tea.Cmd {
 				return m.runTool("Dotfiles on "+row.Name, "companion", "dotfiles", row.Name)
 			}},
+			action{"approve", "approve", []string{"A"}, ok && row.InHub && row.State == "pending" && admin, func() tea.Cmd {
+				m.overlay, m.confirmFocus = "confirm", 1
+				m.confirm = &confirmation{
+					title:  "Approve " + row.Name,
+					body:   fmt.Sprintf("Approve the pending node %s?\n\nIt joins the fleet and receives its certificate; every user may run jobs on it unless it has an owner.", row.Name),
+					button: "Approve",
+					run:    func() tea.Cmd { return m.nodeOp("approve", row.Name, m.client.AdminApprove) },
+				}
+				return nil
+			}},
+			action{"remove", map[bool]string{true: "remove Colab worker", false: "revoke"}[colabRow], []string{"X"}, live && !m.toolBusy, func() tea.Cmd {
+				if colabRow { // its own reviewed flow also stops the Colab VM
+					return m.runTool("Remove Colab worker "+row.Name, "worker", "colab", "rm", row.Name)
+				}
+				m.overlay, m.confirmFocus = "confirm", 1
+				body := fmt.Sprintf("Revoke worker %s?\n\nThe hub revokes all its certificates; this cannot be undone. Its longarmd keeps running but can no longer connect. The hub keeps a revoked record (hidden here until t).", row.Name)
+				if row.SSHHost != "" {
+					body += "\n\nTo bring it back later: lazylongarm worker add --reenroll " + row.SSHHost
+				}
+				m.confirm = &confirmation{
+					title:  "Revoke " + row.Name,
+					body:   body,
+					button: "Revoke",
+					run:    func() tea.Cmd { return m.nodeOp("revoke", row.Name, m.client.WorkerRemove) },
+				}
+				return nil
+			}},
+			action{"revoked", map[bool]string{true: "hide revoked", false: fmt.Sprintf("show revoked (%d)", revoked)}[m.showRevoked], []string{"t"}, revoked > 0 || m.showRevoked, func() tea.Cmd {
+				m.showRevoked = !m.showRevoked
+				m.clampSelection()
+				return nil
+			}},
 		)
 	case tabJobs:
 		j, ok := m.selectedJob()
 		out = append(out,
+			action{"run", "run job", []string{"n"}, hasHub && !m.toolBusy, func() tea.Cmd { return m.runJob("") }},
 			action{"follow", "follow log", []string{"f"}, ok && !m.toolBusy, func() tea.Cmd {
 				return m.runProcess("longarm logs -f", "logs", j.Worker, j.Job.Spec.ID, "-f", "--from", "-65536")
 			}},
@@ -951,11 +1102,11 @@ func createdAt(s string) string {
 }
 
 func jobLabel(j longarm.Job) string {
-	cmd := strings.Join(j.Spec.Argv, " ")
+	cmd := clip(oneLine(strings.Join(j.Spec.Argv, " ")), 120)
 	if j.Spec.Name == "" {
 		return "`" + cmd + "`"
 	}
-	return fmt.Sprintf("%q (%s)", j.Spec.Name, cmd)
+	return fmt.Sprintf("%q (%s)", oneLine(j.Spec.Name), cmd)
 }
 
 func containsKey(keys []string, k string) bool {

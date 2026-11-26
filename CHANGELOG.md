@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.6.0 — 2026-11-26
+
+- The dashboard can change the fleet, not only show it. Fleet: `n` runs a
+  job on the selected worker, `C` adds a Colab worker, `X` removes a Colab
+  worker (stopping its VM) or revokes any other worker after a confirm, `A`
+  approves a pending node (admins). Jobs: `n` runs a job (worker `auto`).
+  After a job is sent the dashboard switches to Jobs and selects it.
+- `job run [worker] [-c LINE | -- argv] [--exec]`: a form (worker, job or
+  exec mode, command, name, cwd, requirements) that hands the command line
+  to `sh -c` (PowerShell on Windows workers) and shows the exact `longarm
+  run` / `longarm exec` command, quoting included, before sending it.
+- `worker colab add --interactive`: a form for name, accelerator and high
+  RAM that shows the compute-unit balance.
+- Revoked workers are hidden by default: `t` on the Fleet tab and
+  `worker ls --all` show them (`--json` still lists every worker). The hub
+  keeps revoked records for its revocation list, so they cannot be deleted.
+- Fix: a job whose command spans several lines (`bash -lc "…"`) no longer
+  breaks the Jobs layout; the list shows it on one line and the detail pane
+  shows the full script above the log. Job text from the hub is stripped of
+  terminal escape sequences.
+
 ## v0.5.2 — 2026-11-26
 
 - Finding the latest release (lazylongarm's `upgrade`, Longarm's for
