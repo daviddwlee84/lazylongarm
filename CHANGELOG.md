@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 — 2026-11-27
 
 - `companion ferry setup [machine…] | --all`: install
   [ferry](https://github.com/daviddwlee84/ferry) (uv into `~/.local/bin`
