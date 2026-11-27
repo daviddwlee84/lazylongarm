@@ -170,7 +170,7 @@ back with `longarm admin revoke <worker>-client`.
 | `companion ssh-config [worker…] \| --all` | OpenSSH aliases `longarm-<worker>` through Longarm's mTLS channel, included from `~/.ssh/config` (`--remove` undoes it) |
 | `companion dotfiles [machine…] \| --all` | bootstrap (or `--update`) chezmoi dotfiles on fleet machines |
 | `companion ferry setup [machine…] \| --all` | install [ferry](https://github.com/daviddwlee84/ferry) and a backend CLI (BaiduPCS-Go, rclone, gh); the backend's own login runs in your terminal |
-| `companion ferry pair SENDER:PATH RECEIVER:PATH` | write the same ferry job on both machines, so bulk data goes through a cloud relay instead of the hub's relay |
+| `companion ferry pair SENDER:PATH RECEIVER:PATH` | write the same ferry job on both machines (same ferry version required), so bulk data goes through a cloud relay, or rsync on a direct route, instead of the hub's relay |
 | `status [--doctor]` | configured hubs, local client, `longarm doctor` |
 | `skill sync` | Longarm's skill into `~/.agents/skills` + Claude symlinks; lazylongarm stub skill |
 | `settings show \| path` | effective configuration and paths |

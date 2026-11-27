@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.7.1 — 2026-11-27
+
+- `companion ferry setup` installs a pinned ferry (the 0.2.0 release commit;
+  ferry has no tags yet), so machines set up together match, and upgrades a
+  ferry older than 0.2.0 (0.1.0 receivers trust paths from the relay).
+- `companion ferry pair` refuses machines whose ferry versions differ or are
+  older than 0.2.0, and names the `setup … --upgrade` that aligns them.
+  `companion status` says when versions differ or are outdated.
+- `companion ferry pair --via rsync [--ssh-host H] [--landing DIR]`: push over
+  ssh from the sender into a landing directory on the receiver. The plan warns
+  when the sender reaches that host through `longarm proxy` (the hub's relay
+  without a direct path) or a ProxyJump.
+- `companion ferry setup` no longer lists a BaiduPCS-Go install step on
+  machines that already have it.
+
 ## v0.7.0 — 2026-11-27
 
 - `companion ferry setup [machine…] | --all`: install

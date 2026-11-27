@@ -37,7 +37,7 @@ plan.
 | Preview `ssh longarm-<worker>` aliases | `lazylongarm companion ssh-config <worker>… [--include auto\|yes\|no] --dry-run --json` (`--remove` undoes) |
 | Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--answers defaults\|<preset>] [--update] --dry-run --json` (default `ask` needs the user's terminal) |
 | Preview installing ferry + a backend CLI (bulk transfers through a cloud relay) | `lazylongarm companion ferry setup <machine>… [--backend baidupcs\|rclone\|gh] --no-login --dry-run --json` (logins need the user's terminal) |
-| Preview a ferry job on a sender and a receiver (when `longarm cp` refuses a large relayed copy, exit 75) | `lazylongarm companion ferry pair <sender>:<path> <receiver>:<path> [--via baidupcs\|rclone\|ghrelease] [--name N] --dry-run --json` |
+| Preview a ferry job on a sender and a receiver (when `longarm cp` refuses a large relayed copy, exit 75) | `lazylongarm companion ferry pair <sender>:<path> <receiver>:<path> [--via baidupcs\|rclone\|ghrelease\|rsync] [--name N] --dry-run --json` (both sides need the same ferry: `setup <a> <b> --upgrade`; rsync only on a direct route) |
 | Effective config and paths | `lazylongarm settings show` |
 
 Errors are a JSON envelope on stderr: `{"error":{"code","message","fix"?,"step"?}}`.

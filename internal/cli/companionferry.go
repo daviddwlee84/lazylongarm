@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/daviddwlee84/lazylongarm/internal/companion"
 	"github.com/daviddwlee84/lazylongarm/internal/config"
+	"github.com/daviddwlee84/lazylongarm/internal/connection"
 	"github.com/daviddwlee84/lazylongarm/internal/flows"
 	"github.com/daviddwlee84/lazylongarm/internal/hostprobe"
 	"github.com/daviddwlee84/lazylongarm/internal/plan"
@@ -56,7 +58,10 @@ func companionFerrySetupCommand(o *options) *cobra.Command {
 		Use:   "setup [machine...]",
 		Short: "Install ferry and backend CLIs on fleet machines and sign the backends in",
 		Long: `Installs uv into ~/.local/bin when missing, then ferry with ` + "`uv tool install`" + `
-(source: config [companions.ferry] install, else the ferry repository). The
+(source: config [companions.ferry] install, else a ferry version pinned by this
+lazylongarm, so machines set up together match). A ferry older than ` + companion.MinFerryVersion + ` is
+upgraded; --upgrade reinstalls from the source, which aligns machines that
+were set up at different times. The
 baidupcs backend installs BaiduPCS-Go into ~/.local/bin from its GitHub
 releases; rclone and gh must come from the system's package manager.
 
@@ -136,6 +141,7 @@ names on the target. --no-login skips the logins and tells you what to run.`,
 
 type ferryPairFlags struct {
 	via, name, prefix, glob, remote, repo, tag, deleteSource string
+	sshHost, landing                                         string
 	extract, service                                         bool
 	apply                                                    applyOptions
 }
@@ -155,12 +161,18 @@ relative to the directory); a file source is one unit. The receiver keeps tar
 archives under the destination unless --extract. Sources are kept
 (delete_source = never) unless --delete-source says otherwise.
 
-Both machines need ferry and the relay's backend signed in: run
-` + "`lazylongarm companion ferry setup`" + ` first. The transfer starts only with --service
+--via rsync pushes over ssh from the sender straight to the receiver (it needs
+a key from one to the other). Use it only on a direct route (LAN, tailnet): an
+ssh alias through ` + "`longarm proxy`" + ` takes the hub's relay when the two workers
+have no direct path, and the plan warns when it sees one.
+
+Both machines need the same ferry (at least ` + companion.MinFerryVersion + `) and the relay's backend
+signed in: run ` + "`lazylongarm companion ferry setup`" + ` first (--upgrade aligns versions). The transfer starts only with --service
 (systemd user units on Linux); otherwise the next steps are printed.`,
 		Example: `  lazylongarm companion ferry pair worker-1:~/datasets/run42 worker-2:/srv/inbox
   lazylongarm companion ferry pair worker-1:/data/exports worker-2:~/in --via rclone --remote gdrive: --glob '*.parquet'
-  lazylongarm companion ferry pair worker-1:~/out worker-2:~/in --via ghrelease --repo you/relay --dry-run`,
+  lazylongarm companion ferry pair worker-1:~/out worker-2:~/in --via ghrelease --repo you/relay --dry-run
+  lazylongarm companion ferry pair worker-1:~/out nas:/srv/in --via rsync --ssh-host nas.lan`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := o.load(); err != nil {
@@ -170,13 +182,15 @@ Both machines need ferry and the relay's backend signed in: run
 		},
 	}
 	fl := c.Flags()
-	fl.StringVar(&f.via, "via", "", "relay adapter: baidupcs, rclone or ghrelease (default: baidupcs)")
+	fl.StringVar(&f.via, "via", "", "relay adapter: baidupcs, rclone, ghrelease or rsync (default: baidupcs)")
 	fl.StringVar(&f.name, "name", "", "job name (default: from the source path); also the relay prefix and state directory name")
 	fl.StringVar(&f.prefix, "prefix", "", "relay directory for this job (default: /ferry/<name>)")
 	fl.StringVar(&f.glob, "glob", "", "units under a directory source, relative to it (default: *)")
 	fl.StringVar(&f.remote, "remote", "", "rclone remote both machines have, e.g. gdrive: (--via rclone)")
 	fl.StringVar(&f.repo, "repo", "", "GitHub repository owner/name for draft-release parts (--via ghrelease)")
 	fl.StringVar(&f.tag, "tag", "", "draft release tag (--via ghrelease; default: ferry-<name>)")
+	fl.StringVar(&f.sshHost, "ssh-host", "", "how the sender reaches the receiver over ssh (--via rsync; default: the receiver's SSH host here, which must resolve on the sender too)")
+	fl.StringVar(&f.landing, "landing", "", "landing directory on the receiver (--via rsync; default: ~/.cache/ferry/<name>/landing)")
 	fl.BoolVar(&f.extract, "extract", false, "unpack units under the destination instead of keeping tar archives")
 	fl.StringVar(&f.deleteSource, "delete-source", "never", "never | after_remote_size | after_receiver_ack (ferry deletes sent sources)")
 	fl.BoolVar(&f.service, "service", false, "install and start ferry's systemd user services (Linux), receiver first")
@@ -223,6 +237,9 @@ func (o *options) ferryPair(cmd *cobra.Command, f *ferryPairFlags, args []string
 			return usage("--via ghrelease needs --repo owner/name")
 		}
 		options["repo"] = f.repo
+	}
+	if (f.sshHost != "" || f.landing != "") && via != "rsync" {
+		return usage("--ssh-host and --landing are for --via rsync")
 	}
 	if f.remote != "" && via != "rclone" {
 		return usage("--remote is for --via rclone")
@@ -306,10 +323,38 @@ func (o *options) ferryPair(cmd *cobra.Command, f *ferryPairFlags, args []string
 		Extract: f.extract, Adapter: via, Prefix: prefix, Options: options,
 		DeleteSource: f.deleteSource, GeneratedBy: "lazylongarm " + Version,
 	}
+	var rsyncHost string
+	var route companion.SSHRoute
+	if via == "rsync" {
+		// The sender runs rsync over ssh to the receiver; the receiver reads
+		// the landing directory locally.
+		rsyncHost = f.sshHost
+		if rsyncHost == "" {
+			rsyncHost = rcv.target.SSHHost
+		}
+		if err := connection.ValidateHost(rsyncHost); err != nil {
+			return usage("--ssh-host: %v", err)
+		}
+		landing := f.landing
+		if landing == "" {
+			landing = path.Join(rcv.facts.Home, ".cache", "ferry", name, "landing")
+		}
+		if landing, err = companion.ExpandPath(landing, rcv.facts.Home); err != nil {
+			return usage("--landing: %v", err)
+		}
+		options["host"], options["root"] = rsyncHost, landing
+		job.ReceiverAdapter, job.ReceiverOptions = "local", map[string]string{"root": landing}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		route, err = flows.ReadSSHRoute(ctx, plan.NewEnv(), snd.target.SSHHost, rsyncHost)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
 	end := func(s ferrySide) flows.FerryEnd {
 		return flows.FerryEnd{Host: s.target.SSHHost, Name: s.target.Name, Record: s.target.ID, OS: s.facts.OS, JobPath: companion.JobPath(s.facts.Home, name)}
 	}
-	req := flows.FerryPairRequest{Job: job, Sender: end(snd), Receiver: end(rcv), Service: f.service}
+	req := flows.FerryPairRequest{Job: job, Sender: end(snd), Receiver: end(rcv), Service: f.service, RsyncHost: rsyncHost, RsyncRoute: route}
 	p, err := flows.BuildCompanionFerryPair(req, snd.state, rcv.state, flows.FerryDeps{Config: o.cfg})
 	if err != nil {
 		return usage("%v", err)
@@ -436,4 +481,20 @@ func ferryFrom(s companion.FerryState, err error) *ferryStatus {
 		st.Backends[b] = s.BackendState(b)
 	}
 	return st
+}
+
+// ferryVersions lists the distinct installed ferry versions (sorted) and the
+// machines whose ferry is older than companion.MinFerryVersion.
+func ferryVersions(rows []companionRow) (versions, outdated []string) {
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.Ferry == nil || r.Ferry.State != "installed" {
+			continue
+		}
+		seen[dash(r.Ferry.Version)] = true
+		if !companion.VersionAtLeast(r.Ferry.Version, companion.MinFerryVersion) {
+			outdated = append(outdated, r.Name)
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), outdated
 }

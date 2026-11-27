@@ -91,7 +91,7 @@ func TestCompletion(t *testing.T) {
 		{[]string{"companion", "ferry", "pair", ""}, []string{"worker-1:", "worker-2:"}, ":6"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", ""}, []string{"worker-1:", "worker-2:"}, ":6"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", "gpu-2:"}, nil, noFile},
-		{[]string{"companion", "ferry", "pair", "--via", ""}, []string{"baidupcs", "rclone", "ghrelease"}, noFile},
+		{[]string{"companion", "ferry", "pair", "--via", ""}, []string{"baidupcs", "rclone", "ghrelease", "rsync"}, noFile},
 		{[]string{"skill", "print", ""}, []string{"skill"}, noFile},
 		{[]string{"--color", ""}, []string{"auto", "always", "never"}, noFile},
 		{[]string{"version", ""}, nil, noFile},

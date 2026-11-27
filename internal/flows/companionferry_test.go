@@ -50,7 +50,7 @@ func TestCompanionFerrySetupSkipsInstalledAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[0].Status != plan.Skipped || results[1].Status != plan.Skipped || results[2].Status != plan.Done {
+	if ids(p) != "install-ferry,login-baidupcs,verify,save-target" || results[0].Status != plan.Skipped || results[1].Status != plan.Done {
 		t.Fatalf("results %+v", results)
 	}
 	if !strings.HasSuffix(login, `exec "$bp" login`) {
@@ -100,7 +100,7 @@ func ferryPairReq() FerryPairRequest {
 }
 
 func TestCompanionFerryPairPlan(t *testing.T) {
-	ready := companion.FerryState{Ferry: "/x/ferry", BaiduPCS: "/x/b", BaiduPCSLogin: true}
+	ready := companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", BaiduPCS: "/x/b", BaiduPCSLogin: true}
 	req := ferryPairReq()
 	req.Service = true
 	p, err := BuildCompanionFerryPair(req, ready, ready, FerryDeps{})
@@ -129,16 +129,16 @@ func TestCompanionFerryPairPlan(t *testing.T) {
 }
 
 func TestCompanionFerryPairRefusals(t *testing.T) {
-	ready := companion.FerryState{Ferry: "/x/ferry", BaiduPCS: "/x/b", BaiduPCSLogin: true}
+	ready := companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", BaiduPCS: "/x/b", BaiduPCSLogin: true}
 	req := ferryPairReq()
-	if _, err := BuildCompanionFerryPair(req, ready, companion.FerryState{Ferry: "/x/ferry", BaiduPCS: "/x/b"}, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "baidupcs is not signed in on worker-2 (run: lazylongarm companion ferry setup worker-2 --backend baidupcs)") {
+	if _, err := BuildCompanionFerryPair(req, ready, companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", BaiduPCS: "/x/b"}, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "baidupcs is not signed in on worker-2 (run: lazylongarm companion ferry setup worker-2 --backend baidupcs)") {
 		t.Fatalf("unsigned receiver: %v", err)
 	}
 	if _, err := BuildCompanionFerryPair(req, companion.FerryState{}, ready, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "ferry is not installed on worker-1") {
 		t.Fatalf("no ferry: %v", err)
 	}
 	req.Job.Adapter, req.Job.Options = "rclone", map[string]string{"remote": "gdrive:"}
-	rc := companion.FerryState{Ferry: "/x/ferry", Rclone: "/x/rclone", RcloneRemotes: []string{"s3:"}}
+	rc := companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", Rclone: "/x/rclone", RcloneRemotes: []string{"s3:"}}
 	if _, err := BuildCompanionFerryPair(req, rc, rc, FerryDeps{}); err == nil || !strings.Contains(err.Error(), `has no remote "gdrive:"`) {
 		t.Fatalf("missing rclone remote: %v", err)
 	}
@@ -153,5 +153,63 @@ func TestReadCompanionStateLocally(t *testing.T) {
 	s, err := ReadCompanionState(context.Background(), plan.NewEnv(), "")
 	if err != nil || s.DotfilesErr != nil || s.FerryErr != nil {
 		t.Fatalf("%v %v %v", err, s.DotfilesErr, s.FerryErr)
+	}
+}
+
+func TestCompanionFerryPairVersions(t *testing.T) {
+	ready := companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", BaiduPCS: "/x/b", BaiduPCSLogin: true}
+	old := ready
+	old.Version = "0.1.0"
+	if _, err := BuildCompanionFerryPair(ferryPairReq(), ready, old, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "ferry 0.1.0 on worker-2 is older than 0.2.0; run: lazylongarm companion ferry setup worker-2 --upgrade") {
+		t.Fatalf("old receiver: %v", err)
+	}
+	newer := ready
+	newer.Version = "0.3.0"
+	if _, err := BuildCompanionFerryPair(ferryPairReq(), newer, ready, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "ferry versions differ (worker-1 0.3.0, worker-2 0.2.0)") || !strings.Contains(err.Error(), "setup worker-1 worker-2 --upgrade") {
+		t.Fatalf("mismatch: %v", err)
+	}
+}
+
+func TestCompanionFerryPairRsync(t *testing.T) {
+	st := companion.FerryState{Ferry: "/x/ferry", Version: "0.2.0", Rsync: "/usr/bin/rsync"}
+	req := ferryPairReq()
+	landing := "/Users/u/.cache/ferry/run42/landing"
+	req.Job.Adapter, req.Job.Options = "rsync", map[string]string{"host": "longarm-worker-2", "root": landing}
+	req.Job.ReceiverAdapter, req.Job.ReceiverOptions = "local", map[string]string{"root": landing}
+	req.RsyncHost = "longarm-worker-2"
+	req.RsyncRoute = companion.SSHRoute{HostName: "worker-2", ProxyCommand: "longarm proxy worker-2"}
+	p, err := BuildCompanionFerryPair(req, st, st, FerryDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	p.Render(&b)
+	for _, s := range []string{"rsync over ssh from worker-1 to longarm-worker-2 (worker-2), landing in " + landing, "takes the hub's relay", "[remote.sides.receiver]", "non-interactive ssh"} {
+		if !strings.Contains(b.String(), s) {
+			t.Errorf("review lacks %q:\n%s", s, b.String())
+		}
+	}
+	if strings.Contains(b.String(), "not the Longarm hub") {
+		t.Error("rsync job claims to avoid the hub")
+	}
+	noRsync := st
+	noRsync.Rsync = ""
+	if _, err := BuildCompanionFerryPair(req, st, noRsync, FerryDeps{}); err == nil || !strings.Contains(err.Error(), "rsync is not installed on worker-2") {
+		t.Fatalf("no rsync: %v", err)
+	}
+}
+
+func TestCompanionFerrySetupUpgradesOutdated(t *testing.T) {
+	f := ubuntu()
+	state := companion.FerryState{Ferry: "/x/ferry", Version: "0.1.0", UV: "/x/uv", BaiduPCS: "/x/b", BaiduPCSLogin: true}
+	p, err := BuildCompanionFerrySetup(FerrySetupRequest{Host: "h"}, f, state, FerryDeps{State: func(context.Context, *plan.Env, string) (companion.FerryState, error) { return state, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Steps[0].Title != "Upgrade ferry (0.1.0 is older than 0.2.0)" || !strings.Contains(p.Steps[0].Actions[0].Display, "--reinstall") {
+		t.Fatalf("%+v", p.Steps[0])
+	}
+	if skip, _ := p.Steps[0].Check(context.Background(), plan.NewEnv()); skip {
+		t.Fatal("outdated ferry skipped")
 	}
 }
