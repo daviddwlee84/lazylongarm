@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.1 — 2026-11-27
 
 - `companion ferry setup` installs a pinned ferry (the 0.2.0 release commit;
   ferry has no tags yet), so machines set up together match, and upgrades a
