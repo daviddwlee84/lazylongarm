@@ -360,11 +360,13 @@ and leave work that is already done alone.
 
 | Command | What it does |
 |---|---|
-| `companion status [--no-remote]` | hc / herdr columns from their machine lists here; a dotfiles column from a read-only check over SSH (chezmoi source, origin, revision) |
+| `companion status [--no-remote]` | hc / herdr columns from their machine lists here; dotfiles and ferry columns from one read-only check over SSH (chezmoi source, origin, revision; ferry version and which backends are signed in) |
 | `companion remotes` | for each machine hc or herdr does not list: `hc machine add <ssh-host> --install --name <machine>` (copies hc there when missing or old) and `herdr machine add <ssh-host> --label <machine>` (installs and starts the herdr server there; approve its prompts in the terminal). `--tool hc\|herdr` limits it; a tool not installed here is skipped with a warning |
 | `companion remotes --transport longarm` | registers `longarm-<worker>` instead of the SSH host (see below); arguments may be Longarm worker names. A machine hc or herdr already reaches over its SSH host is left alone unless `--switch` replaces that entry (its terminals keep running; hc allows one entry per machine) |
 | `companion ssh-config` | writes the `longarm-<worker>` OpenSSH aliases (see below); `--remove` undoes it |
 | `companion dotfiles` | bootstraps chezmoi dotfiles in your terminal (`ssh -tt`, so sudo prompts work), then records the bundle and revision on the target. A machine that already has dotfiles is skipped (`--update` runs `chezmoi update --init`); one with dotfiles from another repository is refused, never replaced |
+| `companion ferry setup` | installs ferry and a backend CLI, then runs the backend's own login in your terminal (see [Bulk transfers with ferry](#bulk-transfers-with-ferry)) |
+| `companion ferry pair` | writes the same ferry job on a sender and a receiver and checks both sides |
 
 ### Reaching workers through Longarm (`longarm-<worker>`)
 
@@ -456,6 +458,64 @@ an unknown placeholder, or one used without a value, stops the plan. The bundle
 is `--bundle`, else the target's `dotfiles_bundle`, else `bundle_by_os[<os>]`,
 else `default_bundle`. Leave a non-interactive flag such as `--yes` out of the
 template to get your script's own interactive setup in the terminal.
+
+### Bulk transfers with ferry
+
+`longarm cp`, `put` and `get` move data directly between two machines when
+they can reach each other. Otherwise the data goes through the hub's relay,
+which is rate-limited (`relay_rate`), counts as the hub's network egress (often
+billed), and uses the hub VM's CPU. Longarm itself refuses large relayed copies
+and suggests "cloud storage both sides use".
+[ferry](https://github.com/daviddwlee84/ferry) does that: it packs units,
+pushes them to a relay both machines reach (Baidu Pan through BaiduPCS-Go, any
+rclone remote, or a GitHub draft release) and verifies every part with
+sha256 on the way in. Transfers resume after a restart, and ferry can cap
+bandwidth, set a daily quota and restrict transfers to certain hours.
+
+```sh
+lazylongarm companion ferry setup worker-1 worker-2              # baidupcs by default
+lazylongarm companion ferry setup worker-1 worker-2 --backend rclone
+lazylongarm companion ferry pair worker-1:~/datasets/run42 worker-2:/srv/inbox
+lazylongarm companion ferry pair worker-1:/data/exports worker-2:~/in \
+  --via rclone --remote gdrive: --glob '*.parquet' --extract
+```
+
+`setup` installs uv into `~/.local/bin` when missing and then ferry with
+`uv tool install` (from `[companions.ferry] install`, else the ferry
+repository). The `baidupcs` backend downloads BaiduPCS-Go from its GitHub
+releases into `~/.local/bin`; rclone and gh come from the system's package
+manager. A backend that is not signed in gets its own login (`BaiduPCS-Go
+login`, `rclone config`, `gh auth login`) in your terminal over `ssh -tt`.
+lazylongarm checks only *whether* a backend is signed in, never which account,
+and records the ferry version and signed-in backend names on the target.
+`--no-login` skips the logins and says what to run.
+
+`pair <sender>:<path> <receiver>:<path>` checks that both machines have ferry
+and the relay's backend signed in, then writes **one** job file,
+`~/.config/ferry/jobs/<name>.toml`, on both (ferry's own wizard uses the same
+location). It refuses to replace a different file there. Then it runs
+`ferry doctor` on each side and `ferry plan` on the sender, and records the
+pair under `[[companions.ferry.jobs]]`. Paths are on each machine: absolute,
+`~/…`, or relative to its home directory.
+
+| Choice | Default | Flag |
+|---|---|---|
+| units | each entry of a directory source; a file source is one unit | `--glob` (relative to the directory) |
+| relay | `baidupcs`, prefix `/ferry/<name>` | `--via rclone --remote R`, `--via ghrelease --repo owner/name [--tag T]`, `--prefix` |
+| destination | tar archives kept under the destination | `--extract` unpacks (each unit path is replaced whole) |
+| sources | kept (`delete_source = "never"`) | `--delete-source after_remote_size\|after_receiver_ack` |
+| egress | `direct` (`ferry doctor` checks the route to the relay) | edit the job file |
+| start | nothing runs; the next steps are printed | `--service` installs ferry's systemd user units (Linux), receiver first |
+
+There is no `--via rsync`: when two machines reach each other, `longarm cp`
+already takes the direct path, and rsync over a `longarm-<worker>` alias
+would put the data back on the hub's relay.
+
+```toml
+[companions.ferry]
+# install = "git+https://github.com/daviddwlee84/ferry@<tag>"   # pin a version
+backends = ["baidupcs"]
+```
 
 ## Hub VM (Azure)
 

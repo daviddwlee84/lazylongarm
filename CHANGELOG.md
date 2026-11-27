@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.7.0 — 2026-11-27
+
+- `companion ferry setup [machine…] | --all`: install
+  [ferry](https://github.com/daviddwlee84/ferry) (uv into `~/.local/bin`
+  when missing, then `uv tool install`) and a backend CLI (`--backend
+  baidupcs|rclone|gh`; BaiduPCS-Go comes from its GitHub releases), then run
+  the backend's own login in your terminal. Only whether a backend is signed
+  in is checked and recorded, never the account. `--no-login`, `--upgrade`.
+- `companion ferry pair SENDER:PATH RECEIVER:PATH`: write the same ferry job
+  (`~/.config/ferry/jobs/<name>.toml`) on both machines, refusing to replace
+  a different file, then run `ferry doctor` on each side and `ferry plan` on
+  the sender. Bulk data then goes through a cloud relay (Baidu Pan, an rclone
+  remote, a GitHub draft release) instead of the hub's relay. Sources are
+  kept and nothing starts unless `--service` (systemd user units on Linux).
+- `companion status` has a FERRY column (version, signed-in backends) and
+  reads dotfiles and ferry state in one SSH round trip per machine.
+- Config: `[companions.ferry]` (`install`, `backends`, `[[jobs]]`); targets
+  record `ferry_version`, `ferry_backends`, `ferry_checked_at`.
+
 ## v0.6.0 — 2026-11-26
 
 - The dashboard can change the fleet, not only show it. Fleet: `n` runs a

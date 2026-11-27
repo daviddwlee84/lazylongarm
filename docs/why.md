@@ -50,7 +50,7 @@ rarely enough that you never remember the exact steps.
 | Watching the fleet | `longarm worker ls` / `jobs` / `logs` in separate commands | a lazygit-style dashboard: workers with CPU, memory, path and labels; jobs with a live log tail, follow and guarded kill; hub checks and `longarm doctor` |
 | Hub operations | SSH in for status, backups, panel accounts | `hub status`, `hub backup`, `hub panel` (SSH tunnel to the loopback-only panel), `hub panel-user` (password + TOTP) |
 | Hub VM (Azure) | Azure portal or `az` | `hub vm status/start/stop/restart/delete` with traffic and a monthly cost estimate; deletion is guarded by a backup check |
-| Tools around the fleet | set each machine up separately | `companion remotes` registers machines in hc and herdr; `companion dotfiles` bootstraps chezmoi dotfiles on them ([operating guide](operating-guide.md#companions)) |
+| Tools around the fleet | set each machine up separately | `companion remotes` registers machines in hc and herdr; `companion dotfiles` bootstraps chezmoi dotfiles on them; `companion ferry` sets up bulk transfers through a cloud relay instead of the hub ([operating guide](operating-guide.md#companions)) |
 | Coding agents | write your own instructions | `--json` everywhere with a stable error envelope, plus an embedded skill (`lazylongarm --skill`, `skill sync`) |
 
 ## What lazylongarm deliberately does not do

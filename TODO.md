@@ -100,8 +100,15 @@ user service), `worker ls`, `status`, dashboard (Fleet/Jobs/Hub), embedded skill
   `remotes.toml` + `remotes.d/`, hc/herdr machine lists, and a dotfiles fleet
   inventory as picker suggestions; never copy their schemas.
 - **Companion tab in the dashboard (P3, M)**: the `companion status` matrix
-  (hc / herdr / dotfiles per machine) with the `R`/`D` actions and a bulk
-  "register all missing".
+  (hc / herdr / dotfiles / ferry per machine) with the `R`/`D` actions and a
+  bulk "register all missing"; the `[[companions.ferry.jobs]]` list with
+  `ferry status --json` from both sides.
+- **Pin ferry (P3, S)**: default `[companions.ferry] install` to a tagged
+  release (`git+…/ferry@vX.Y.Z`) once ferry publishes tags, and show "update
+  available" in `companion status`.
+- **Suggest ferry when longarm refuses a relayed copy (P3, S)**: a dashboard
+  or `job run` hint when `longarm cp/put/get` exits 75 over a relayed path,
+  pointing at `companion ferry pair` (only for machines with ferry set up).
 - **Longarm transport in the dashboard (P3, S)**: let the Fleet tab's `R`
   choose `ssh` or `longarm` (`companion remotes --transport longarm`), and
   `--all` include hub workers lazylongarm does not manage (`longarm ls --json`).

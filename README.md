@@ -165,10 +165,12 @@ back with `longarm admin revoke <worker>-client`.
 | `user self USER [--device D]` | create your Longarm user and switch this machine to an admin certificate of it (old one backed up; panel login for `/link`) |
 | `user invite USER [--out FILE]` | add a user and write an invite with install, join and worker steps; refuses while fleet workers exist |
 | `user ls` / `user remove USER [--purge]` | users with device/worker counts and the fleet workers everyone may use; revoke a user's devices and workers |
-| `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles there |
+| `companion status` | per machine: hc / herdr registration here, chezmoi dotfiles and ferry there |
 | `companion remotes [machine…] \| --all` | register fleet machines in hc and herdr on this computer (`--transport longarm`: as `longarm-<worker>`, keyless through Longarm) |
 | `companion ssh-config [worker…] \| --all` | OpenSSH aliases `longarm-<worker>` through Longarm's mTLS channel, included from `~/.ssh/config` (`--remove` undoes it) |
 | `companion dotfiles [machine…] \| --all` | bootstrap (or `--update`) chezmoi dotfiles on fleet machines |
+| `companion ferry setup [machine…] \| --all` | install [ferry](https://github.com/daviddwlee84/ferry) and a backend CLI (BaiduPCS-Go, rclone, gh); the backend's own login runs in your terminal |
+| `companion ferry pair SENDER:PATH RECEIVER:PATH` | write the same ferry job on both machines, so bulk data goes through a cloud relay instead of the hub's relay |
 | `status [--doctor]` | configured hubs, local client, `longarm doctor` |
 | `skill sync` | Longarm's skill into `~/.agents/skills` + Claude symlinks; lazylongarm stub skill |
 | `settings show \| path` | effective configuration and paths |

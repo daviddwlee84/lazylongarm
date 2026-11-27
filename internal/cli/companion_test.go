@@ -176,3 +176,24 @@ func TestCompanionStatusShowsLongarmEntries(t *testing.T) {
 		t.Fatalf("%d %s %s", code, out, errOut)
 	}
 }
+
+func TestCompanionFerryUsageErrors(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"companion", "ferry", "pair", "worker-1", "worker-2:/in"}, "write <machine>:<path>"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "rsync"}, "unknown relay adapter"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "rclone"}, "needs --remote"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "ghrelease"}, "needs --repo"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--remote", "gdrive:"}, "--remote is for --via rclone"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-1:/in"}, "same machine"},
+		{[]string{"companion", "ferry", "setup", "worker-1", "--backend", "dropbox"}, "unknown ferry backend"},
+		{[]string{"companion", "ferry", "setup"}, "when not in a terminal"},
+	} {
+		code, _, errOut := runWith(t, fleetCfg, fakeTools(`{"machines":[]}`), tc.args...)
+		if code != 2 || !strings.Contains(errOut, tc.want) {
+			t.Errorf("%v: exit %d, stderr %q; want 2 and %q", tc.args, code, errOut, tc.want)
+		}
+	}
+}

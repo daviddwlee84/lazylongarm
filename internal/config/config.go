@@ -125,6 +125,13 @@ type Target struct {
 	DotfilesBundle    string `toml:"dotfiles_bundle,omitempty"`     // bundle used (or to use) for this machine
 	DotfilesRev       string `toml:"dotfiles_rev,omitempty"`        // source revision seen after the last bootstrap
 	DotfilesAppliedAt string `toml:"dotfiles_applied_at,omitempty"` // RFC 3339
+
+	// Companion state, written by `lazylongarm companion ferry setup`:
+	// the ferry version and the backends signed in (names only, never
+	// accounts or tokens).
+	FerryVersion   string   `toml:"ferry_version,omitempty"`
+	FerryBackends  []string `toml:"ferry_backends,omitempty"`
+	FerryCheckedAt string   `toml:"ferry_checked_at,omitempty"` // RFC 3339
 }
 
 // Companions configures the tools lazylongarm sets up next to Longarm on
@@ -132,6 +139,47 @@ type Target struct {
 type Companions struct {
 	Dotfiles Dotfiles `toml:"dotfiles,omitempty"`
 	SSH      SSH      `toml:"ssh,omitempty"`
+	Ferry    Ferry    `toml:"ferry,omitempty"`
+}
+
+// Ferry configures `lazylongarm companion ferry`: bulk transfers between
+// fleet machines through a cloud relay instead of the hub's relay.
+type Ferry struct {
+	// Install is what `uv tool install` gets; empty = the ferry repository.
+	Install string `toml:"install,omitempty"`
+	// Backends set up by `companion ferry setup` when --backend is not given
+	// (baidupcs, rclone, gh). Empty = baidupcs.
+	Backends []string `toml:"backends,omitempty"`
+	// Jobs are the pairs `companion ferry pair` wrote.
+	Jobs []FerryJob `toml:"jobs,omitempty"`
+}
+
+// FerryJob records one job file written on two machines. It holds no
+// credentials: logins stay in each machine's backend CLI.
+type FerryJob struct {
+	Name      string `toml:"name"`
+	Sender    string `toml:"sender"`   // target id, or the SSH host for ad-hoc machines
+	Receiver  string `toml:"receiver"` // likewise
+	Source    string `toml:"source"`   // absolute path on the sender
+	Dest      string `toml:"dest"`     // absolute path on the receiver
+	Adapter   string `toml:"adapter"`
+	Prefix    string `toml:"prefix"`
+	CreatedAt string `toml:"created_at,omitempty"`
+}
+
+// UpsertJob inserts or replaces j by name.
+func (f *Ferry) UpsertJob(j FerryJob) {
+	for i := range f.Jobs {
+		if f.Jobs[i].Name == j.Name {
+			if j.CreatedAt == "" {
+				j.CreatedAt = f.Jobs[i].CreatedAt
+			}
+			f.Jobs[i] = j
+			return
+		}
+	}
+	f.Jobs = append(f.Jobs, j)
+	sort.SliceStable(f.Jobs, func(a, b int) bool { return f.Jobs[a].Name < f.Jobs[b].Name })
 }
 
 // SSH configures `lazylongarm companion ssh-config` (Longarm ssh aliases,
@@ -336,8 +384,8 @@ func (c *Config) RemoveHub(id string) {
 
 // UpsertTarget inserts or replaces t by ID. Replacing keeps the original
 // added_at, client name and the companion state when t leaves them empty, so
-// rerunning `worker add` does not forget what `peer add` or `companion
-// dotfiles` recorded.
+// rerunning `worker add` does not forget what `peer add`, `companion
+// dotfiles` or `companion ferry setup` recorded.
 func (c *Config) UpsertTarget(t Target) {
 	for i := range c.Targets {
 		if c.Targets[i].ID == t.ID {
@@ -350,6 +398,9 @@ func (c *Config) UpsertTarget(t Target) {
 			}
 			if t.DotfilesBundle == "" && t.DotfilesRev == "" && t.DotfilesAppliedAt == "" {
 				t.DotfilesBundle, t.DotfilesRev, t.DotfilesAppliedAt = old.DotfilesBundle, old.DotfilesRev, old.DotfilesAppliedAt
+			}
+			if t.FerryVersion == "" && len(t.FerryBackends) == 0 && t.FerryCheckedAt == "" {
+				t.FerryVersion, t.FerryBackends, t.FerryCheckedAt = old.FerryVersion, old.FerryBackends, old.FerryCheckedAt
 			}
 			c.Targets[i] = t
 			return

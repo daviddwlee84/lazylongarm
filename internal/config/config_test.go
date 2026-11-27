@@ -430,3 +430,31 @@ func TestPanelAccessRoundTripAndValidation(t *testing.T) {
 		t.Fatal("unknown mode accepted")
 	}
 }
+
+func TestFerryStateRoundTripAndSurvivesUpsert(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	c, _ := Load(path, false)
+	c.UpsertTarget(Target{ID: "w1", Name: "w1", SSHHost: "worker-1"})
+	c.Targets[0].FerryVersion, c.Targets[0].FerryBackends = "0.2.0", []string{"baidupcs"}
+	c.UpsertTarget(Target{ID: "w1", Name: "w1", SSHHost: "worker-1", Service: "system"}) // worker add rerun
+	if got := c.Targets[0]; got.FerryVersion != "0.2.0" || len(got.FerryBackends) != 1 {
+		t.Fatalf("upsert lost ferry state: %+v", got)
+	}
+	c.Companions.Ferry.UpsertJob(FerryJob{Name: "photos", Sender: "w1", Receiver: "w2", Source: "/data/photos", Dest: "/srv/in", Adapter: "baidupcs", Prefix: "/ferry/photos", CreatedAt: "2026-01-01T00:00:00Z"})
+	c.Companions.Ferry.UpsertJob(FerryJob{Name: "logs", Sender: "w2", Receiver: "w1", Source: "/var/log/x", Dest: "/srv/logs", Adapter: "rclone", Prefix: "/ferry/logs"})
+	c.Companions.Ferry.UpsertJob(FerryJob{Name: "photos", Sender: "w1", Receiver: "w2", Source: "/data/photos", Dest: "/srv/in2", Adapter: "baidupcs", Prefix: "/ferry/photos"})
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := loaded.Companions.Ferry.Jobs
+	if len(jobs) != 2 || jobs[0].Name != "logs" || jobs[1].Dest != "/srv/in2" || jobs[1].CreatedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("jobs %+v", jobs)
+	}
+	if loaded.Targets[0].FerryBackends[0] != "baidupcs" {
+		t.Fatalf("%+v", loaded.Targets[0])
+	}
+}

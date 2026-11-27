@@ -16,7 +16,7 @@ internal/hubhost       hub.toml render, bootstrap.env / ca show parsing
 internal/cloudfw       Azure NSG discovery and rule planning via `az`
 internal/release       GitHub release download + SHA256SUMS verification + cache
 internal/fleet         hub registry ⨝ managed targets; hub status checks
-internal/companion     hc/herdr machine lists via their CLIs; chezmoi state script, bootstrap templates
+internal/companion     hc/herdr machine lists via their CLIs; chezmoi state script, bootstrap templates; ferry state/install scripts and job files
 internal/config        XDG paths, TOML config; locked read-modify-write updates
 internal/secret        redacting wrapper for join codes / TOTP secrets
 ```
@@ -72,7 +72,12 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
 `companion remotes|dotfiles` reuse the plan engine: `flows.BuildCompanionRemotes`
 (local steps; Check = the tool already lists the machine) and
 `flows.BuildCompanionDotfiles` (bootstrap or update over `ssh -tt` → verify →
-record on the target). Other tools' inventories are read through their public
+record on the target). `companion ferry` follows the same pattern:
+`flows.BuildCompanionFerrySetup` (install ferry → backend → login over
+`ssh -tt` → verify → record) and `flows.BuildCompanionFerryPair` (write one
+job file on both machines, never replacing a different one → `ferry doctor`
+per side → `ferry plan` → optional services → record the pair). `companion
+status` reads the dotfiles and ferry state in one SSH round trip. Other tools' inventories are read through their public
 `--json` output only. Personal values (repository, bundles, a bootstrap command)
 live in the user's config; the code and docs carry only placeholders.
 

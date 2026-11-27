@@ -23,7 +23,7 @@ import (
 func companionCommand(o *options) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "companion",
-		Short: "Set up companion tools for fleet machines: hc/herdr remotes and chezmoi dotfiles",
+		Short: "Set up companion tools for fleet machines: hc/herdr remotes, chezmoi dotfiles, ferry",
 		Long: `lazylongarm already knows the fleet's machines, so it can set up the tools you
 use next to Longarm without retyping hosts:
 
@@ -31,14 +31,15 @@ use next to Longarm without retyping hosts:
               (over their SSH hosts, or keyless through Longarm)
   ssh-config  OpenSSH aliases longarm-<worker> through Longarm's mTLS channel
   dotfiles    bootstrap (or update) chezmoi dotfiles on the machines
+  ferry       bulk transfers through a cloud relay instead of the hub's relay
   status      show which machines have what
 
 Personal values (your dotfiles repository, bundles, a bootstrap command) live in
 the [companions.dotfiles] table of lazylongarm's config; ssh-config settings in
-[companions.ssh].`,
+[companions.ssh]; ferry settings and the jobs it wrote in [companions.ferry].`,
 		Args: cobra.ArbitraryArgs, RunE: groupHelp,
 	}
-	c.AddCommand(companionStatusCommand(o), companionRemotesCommand(o), companionSSHConfigCommand(o), companionDotfilesCommand(o))
+	c.AddCommand(companionStatusCommand(o), companionRemotesCommand(o), companionSSHConfigCommand(o), companionDotfilesCommand(o), companionFerryCommand(o))
 	return c
 }
 
@@ -187,6 +188,7 @@ type companionRow struct {
 	SSHHost  string            `json:"ssh_host"`
 	Remotes  map[string]string `json:"remotes"` // tool → registered state | missing | not installed
 	Dotfiles *dotfilesStatus   `json:"dotfiles,omitempty"`
+	Ferry    *ferryStatus      `json:"ferry,omitempty"`
 }
 
 type dotfilesStatus struct {
@@ -201,10 +203,11 @@ func companionStatusCommand(o *options) *cobra.Command {
 	var noRemote bool
 	c := &cobra.Command{
 		Use:   "status",
-		Short: "Show hc/herdr registration and dotfiles state for each fleet machine",
+		Short: "Show hc/herdr registration, dotfiles and ferry state for each fleet machine",
 		Long: `hc and herdr columns come from their machine lists on this computer. The
-dotfiles column runs a read-only check over SSH on each machine (skip it with
---no-remote).`,
+dotfiles and ferry columns run read-only checks over SSH on each machine (skip
+them with --no-remote). The ferry column shows its version and, per installed
+backend, whether it is signed in (never which account).`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := o.load(); err != nil {
@@ -244,7 +247,7 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						rows[i].Dotfiles = checkDotfiles(cmd.Context(), t, repo)
+						rows[i].Dotfiles, rows[i].Ferry = checkCompanions(cmd.Context(), t, repo)
 					}()
 				}
 				wg.Wait()
@@ -273,10 +276,10 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			header := "MACHINE\tSSH\tHC\tHERDR"
 			if !noRemote {
-				header += "\tDOTFILES\tREV\tBUNDLE"
+				header += "\tDOTFILES\tREV\tBUNDLE\tFERRY"
 			}
 			fmt.Fprintln(tw, header)
-			missing, setup := false, false
+			missing, setup, ferryLogin := false, false, false
 			for _, r := range rows {
 				line := fmt.Sprintf("%s\t%s\t%s\t%s", r.Name, r.SSHHost, r.Remotes[companion.HC], r.Remotes[companion.Herdr])
 				missing = missing || r.Remotes[companion.HC] == "missing" || r.Remotes[companion.Herdr] == "missing"
@@ -287,6 +290,16 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 					}
 					line += fmt.Sprintf("\t%s\t%s\t%s", state, dash(d.Rev), dash(d.Bundle))
 					setup = setup || d.State == "not-set-up" || d.State == "chezmoi-only"
+				}
+				if fs := r.Ferry; fs != nil {
+					cell := fs.Summary
+					if fs.Error != "" {
+						cell += ": " + firstLine(fs.Error)
+					}
+					line += "\t" + cell
+					for _, st := range fs.Backends {
+						ferryLogin = ferryLogin || st == "login-needed"
+					}
 				}
 				fmt.Fprintln(tw, line)
 			}
@@ -299,21 +312,35 @@ dotfiles column runs a read-only check over SSH on each machine (skip it with
 			if setup {
 				fmt.Fprintln(out, "Set up dotfiles:           lazylongarm companion dotfiles <machine>")
 			}
+			if ferryLogin {
+				fmt.Fprintln(out, "Sign ferry backends in:    lazylongarm companion ferry setup <machine> --backend <backend>")
+			}
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&noRemote, "no-remote", false, "skip the dotfiles check over SSH")
+	c.Flags().BoolVar(&noRemote, "no-remote", false, "skip the dotfiles and ferry checks over SSH")
 	return c
 }
 
-func checkDotfiles(ctx context.Context, t config.Target, repo string) *dotfilesStatus {
-	d := &dotfilesStatus{Bundle: t.DotfilesBundle}
+// checkCompanions reads a machine's dotfiles and ferry state over one SSH
+// connection.
+func checkCompanions(ctx context.Context, t config.Target, repo string) (*dotfilesStatus, *ferryStatus) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	s, err := flows.ReadDotfilesState(cctx, plan.NewEnv(), t.SSHHost)
+	s, err := flows.ReadCompanionState(cctx, plan.NewEnv(), t.SSHHost)
 	switch {
 	case connection.IsAuthRequired(err):
-		d.State, d.Error = "error", "ssh login needed (run: ssh "+t.SSHHost+")"
+		msg := "ssh login needed (run: ssh " + t.SSHHost + ")"
+		return &dotfilesStatus{State: "error", Bundle: t.DotfilesBundle, Error: msg}, &ferryStatus{State: "error", Summary: "error", Error: msg}
+	case err != nil:
+		return &dotfilesStatus{State: "error", Bundle: t.DotfilesBundle, Error: err.Error()}, &ferryStatus{State: "error", Summary: "error", Error: err.Error()}
+	}
+	return dotfilesFrom(s.Dotfiles, s.DotfilesErr, t, repo), ferryFrom(s.Ferry, s.FerryErr)
+}
+
+func dotfilesFrom(s companion.DotfilesState, err error, t config.Target, repo string) *dotfilesStatus {
+	d := &dotfilesStatus{Bundle: t.DotfilesBundle}
+	switch {
 	case err != nil:
 		d.State, d.Error = "error", err.Error()
 	case s.Initialized() && repo != "" && s.Origin != "" && !companion.SameRepo(s.Origin, repo):
