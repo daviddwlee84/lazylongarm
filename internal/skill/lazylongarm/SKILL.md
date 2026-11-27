@@ -31,11 +31,13 @@ plan.
 | Preview making this machine an admin of your Longarm user | `lazylongarm user self <user> [--device D] --dry-run --json` (the first user separates users) |
 | Preview moving a fleet worker to a user | `lazylongarm worker add <ssh-alias> --reenroll --owner <user> --dry-run --json` |
 | Invite someone (writes a file with a one-time code; never paste it into chat) | `lazylongarm user invite <user> --out <file> --yes --json` (refuses while fleet workers exist) |
-| hc / herdr registration and dotfiles per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
+| hc / herdr registration, dotfiles and ferry per machine | `lazylongarm companion status --json` (`--no-remote` skips SSH) |
 | Preview registering machines in hc/herdr here | `lazylongarm companion remotes <machine>… \| --all [--tool hc\|herdr] --dry-run --json` |
 | Preview registering them through Longarm (keyless, no direct ssh) | `lazylongarm companion remotes <machine\|worker>… --transport longarm [--switch] --dry-run --json` |
 | Preview `ssh longarm-<worker>` aliases | `lazylongarm companion ssh-config <worker>… [--include auto\|yes\|no] --dry-run --json` (`--remove` undoes) |
 | Preview a dotfiles bootstrap / update | `lazylongarm companion dotfiles <machine>… \| --all [--repo R] [--bundle B] [--answers defaults\|<preset>] [--update] --dry-run --json` (default `ask` needs the user's terminal) |
+| Preview installing ferry + a backend CLI (bulk transfers through a cloud relay) | `lazylongarm companion ferry setup <machine>… [--backend baidupcs\|rclone\|gh] --no-login --dry-run --json` (logins need the user's terminal) |
+| Preview a ferry job on a sender and a receiver (when `longarm cp` refuses a large relayed copy, exit 75) | `lazylongarm companion ferry pair <sender>:<path> <receiver>:<path> [--via baidupcs\|rclone\|ghrelease] [--name N] --dry-run --json` |
 | Effective config and paths | `lazylongarm settings show` |
 
 Errors are a JSON envelope on stderr: `{"error":{"code","message","fix"?,"step"?}}`.
@@ -91,6 +93,11 @@ in their terminal, or use `--service user`), `step-failed`, `step-unknown`
   or herdr, and dotfiles already set up, are skipped; dotfiles from a different
   repository are refused. The dotfiles bootstrap and `herdr machine add` may
   prompt, so let the user run the apply in their terminal.
+- Backend logins for ferry (`BaiduPCS-Go login`, `rclone config`, `gh auth
+  login`) are the user's: never ask for or relay their credentials. `ferry
+  pair` never replaces an existing different job file and does not start a
+  transfer unless `--service`; sending data to a cloud relay is the user's
+  call, so show the plan first.
 - For jobs, use Longarm directly (`longarm run|jobs|logs|kill --json`); its
   `--json` output and exit codes are the stable contract (docs/programs.md).
   `lazylongarm job run` is a form for humans (it hands the terminal to
