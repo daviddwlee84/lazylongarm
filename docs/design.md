@@ -75,7 +75,8 @@ internal/secret        redacting wrapper for join codes / TOTP secrets
 record on the target). `companion ferry` follows the same pattern:
 `flows.BuildCompanionFerrySetup` (install ferry → backend → login over
 `ssh -tt` → verify → record) and `flows.BuildCompanionFerryPair` (write one
-job file on both machines, never replacing a different one → `ferry doctor`
+job file on both machines after checking both run the same ferry, never
+replacing a different one → `ferry doctor`
 per side → `ferry plan` → optional services → record the pair). `companion
 status` reads the dotfiles and ferry state in one SSH round trip. Other tools' inventories are read through their public
 `--json` output only. Personal values (repository, bundles, a bootstrap command)

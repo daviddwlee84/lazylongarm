@@ -183,13 +183,14 @@ func TestCompanionFerryUsageErrors(t *testing.T) {
 		want string
 	}{
 		{[]string{"companion", "ferry", "pair", "worker-1", "worker-2:/in"}, "write <machine>:<path>"},
-		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "rsync"}, "unknown relay adapter"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "scp"}, "unknown relay adapter"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "rclone"}, "needs --remote"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--via", "ghrelease"}, "needs --repo"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--remote", "gdrive:"}, "--remote is for --via rclone"},
 		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-1:/in"}, "same machine"},
 		{[]string{"companion", "ferry", "setup", "worker-1", "--backend", "dropbox"}, "unknown ferry backend"},
 		{[]string{"companion", "ferry", "setup"}, "when not in a terminal"},
+		{[]string{"companion", "ferry", "pair", "worker-1:/data", "worker-2:/in", "--ssh-host", "nas"}, "--ssh-host and --landing are for --via rsync"},
 	} {
 		code, _, errOut := runWith(t, fleetCfg, fakeTools(`{"machines":[]}`), tc.args...)
 		if code != 2 || !strings.Contains(errOut, tc.want) {

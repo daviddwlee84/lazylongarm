@@ -23,14 +23,54 @@ const (
 	BackendBaiduPCS = "baidupcs" // BaiduPCS-Go
 	BackendRclone   = "rclone"
 	BackendGH       = "gh" // GitHub CLI, for the ghrelease adapter
+	// BackendRsync is rsync over ssh, sender to receiver (the rsync adapter).
+	// It needs no login and comes from the system's package manager, so
+	// `companion ferry setup` does not offer it.
+	BackendRsync = "rsync"
 )
 
 // FerryBackends lists every backend lazylongarm knows, in display order.
 var FerryBackends = []string{BackendBaiduPCS, BackendRclone, BackendGH}
 
 // DefaultFerrySpec is what `uv tool install` gets when the config names no
-// other source ([companions.ferry] install).
-const DefaultFerrySpec = "git+https://github.com/daviddwlee84/ferry"
+// other source ([companions.ferry] install). It is pinned so every machine
+// set up by the same lazylongarm gets the same ferry: sender and receiver
+// share relay formats that may change between 0.x versions. ferry publishes
+// no tags yet, so the pin is the 0.2.0 release commit.
+const DefaultFerrySpec = "git+https://github.com/daviddwlee84/ferry@f8e5ccc2934ce34ba73725dc3b614d9c40b64368"
+
+// MinFerryVersion is the oldest ferry `companion ferry pair` writes jobs for:
+// 0.1.0 receivers trust unit keys and member paths from the relay.
+const MinFerryVersion = "0.2.0"
+
+// VersionAtLeast reports whether dotted version v >= minimum ("" is never).
+func VersionAtLeast(v, minimum string) bool {
+	if v == "" {
+		return false
+	}
+	a, b := strings.Split(strings.TrimPrefix(v, "v"), "."), strings.Split(minimum, ".")
+	for i := 0; i < len(a) || i < len(b); i++ {
+		x, y := versionPart(a, i), versionPart(b, i)
+		if x != y {
+			return x > y
+		}
+	}
+	return true
+}
+
+func versionPart(p []string, i int) int {
+	if i >= len(p) {
+		return 0
+	}
+	n := 0
+	for _, r := range p[i] {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
 
 // BaiduPCSVersion is the BaiduPCS-Go release installed when a machine lacks it.
 const BaiduPCSVersion = "v4.0.2"
@@ -43,11 +83,11 @@ func ValidBackend(b string) error {
 	return fmt.Errorf("unknown ferry backend %q (use %s)", b, strings.Join(FerryBackends, ", "))
 }
 
-// Relay adapters `companion ferry pair` writes jobs for. rsync is left out on
-// purpose: between workers that reach each other `longarm cp` already takes
-// the direct path, and rsync over a longarm-<worker> alias would put the data
-// back on the hub's relay.
-var FerryAdapters = []string{"baidupcs", "rclone", "ghrelease"}
+// Relay adapters `companion ferry pair` writes jobs for. rsync pushes over
+// ssh from the sender to the receiver: only worth it on a direct route (LAN,
+// tailnet), since an ssh alias through `longarm proxy` takes the hub's relay
+// when the workers have no direct path.
+var FerryAdapters = []string{"baidupcs", "rclone", "ghrelease", "rsync"}
 
 // AdapterBackend is the backend a relay adapter needs on both machines.
 func AdapterBackend(adapter string) (string, error) {
@@ -58,6 +98,8 @@ func AdapterBackend(adapter string) (string, error) {
 		return BackendRclone, nil
 	case "ghrelease":
 		return BackendGH, nil
+	case "rsync":
+		return BackendRsync, nil
 	}
 	return "", fmt.Errorf("unknown relay adapter %q (use %s)", adapter, strings.Join(FerryAdapters, ", "))
 }
@@ -82,6 +124,7 @@ fi
 rc=$(command -v rclone 2>/dev/null || true)
 kv rclone "$rc"
 if [ -n "$rc" ]; then kv rclone_remotes "$("$rc" listremotes 2>/dev/null </dev/null | tr '\n' ' ')"; fi
+kv rsync "$(command -v rsync 2>/dev/null || true)"
 gh=$(command -v gh 2>/dev/null || true)
 kv gh "$gh"
 if [ -n "$gh" ]; then
@@ -101,6 +144,7 @@ type FerryState struct {
 	RcloneRemotes []string `json:"rclone_remotes,omitempty"`
 	GH            string   `json:"gh,omitempty"`
 	GHLogin       bool     `json:"gh_login,omitempty"`
+	Rsync         string   `json:"rsync,omitempty"`
 }
 
 // ParseFerryState decodes FerryStateScript output.
@@ -132,6 +176,8 @@ func ParseFerryState(out string) (FerryState, error) {
 			s.GH = v
 		case "gh_login":
 			s.GHLogin = v == "yes"
+		case "rsync":
+			s.Rsync = v
 		case "done":
 			done = v == "yes"
 		}
@@ -151,6 +197,8 @@ func (s FerryState) Installed(backend string) bool {
 		return s.Rclone != ""
 	case BackendGH:
 		return s.GH != ""
+	case BackendRsync:
+		return s.Rsync != ""
 	}
 	return false
 }
@@ -165,6 +213,8 @@ func (s FerryState) SignedIn(backend string) bool {
 		return len(s.RcloneRemotes) > 0
 	case BackendGH:
 		return s.GHLogin
+	case BackendRsync:
+		return true
 	}
 	return false
 }
@@ -422,19 +472,24 @@ func JobPath(home, name string) string {
 
 // FerryJob describes the one job file both machines of a pair get.
 type FerryJob struct {
-	Name           string
-	SenderName     string // display names, for the header comment
-	ReceiverName   string
-	Root           string // absolute, on the sender
-	Glob           string // relative to Root
-	Dest           string // absolute, on the receiver
-	Extract        bool
-	Adapter        string
-	Prefix         string
-	Options        map[string]string // adapter options (rclone remote, ghrelease repo/tag)
-	DeleteSource   string            // "" = never
-	GeneratedBy    string            // e.g. "lazylongarm v0.9.0"
-	SourceSelected string            // what the glob selects, in words (comment only)
+	Name         string
+	SenderName   string // display names, for the header comment
+	ReceiverName string
+	Root         string // absolute, on the sender
+	Glob         string // relative to Root
+	Dest         string // absolute, on the receiver
+	Extract      bool
+	Adapter      string
+	Prefix       string
+	Options      map[string]string // adapter options (rclone remote, ghrelease repo/tag, rsync host/root)
+	// ReceiverAdapter overrides the adapter on the receiving side
+	// ([remote.sides.receiver]); rsync jobs read the landing directory
+	// with "local" there.
+	ReceiverAdapter string
+	ReceiverOptions map[string]string
+	DeleteSource    string // "" = never
+	GeneratedBy     string // e.g. "lazylongarm v0.9.0"
+	SourceSelected  string // what the glob selects, in words (comment only)
 }
 
 // tomlString is a TOML basic string (JSON escapes are valid TOML).
@@ -493,18 +548,69 @@ func (j FerryJob) Render() (string, error) {
 	fmt.Fprintf(&b, "prefix = %s\n", tomlString(j.Prefix))
 	b.WriteString("egress = \"direct\"\n")
 	if len(j.Options) > 0 {
-		keys := make([]string, 0, len(j.Options))
-		for k := range j.Options {
-			keys = append(keys, k)
+		fmt.Fprintf(&b, "options = { %s }\n", inlineTable(j.Options))
+	}
+	if j.ReceiverAdapter != "" {
+		b.WriteString("\n[remote.sides.receiver]\n")
+		fmt.Fprintf(&b, "adapter = %s\n", tomlString(j.ReceiverAdapter))
+		if len(j.ReceiverOptions) > 0 {
+			fmt.Fprintf(&b, "options = { %s }\n", inlineTable(j.ReceiverOptions))
 		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = k + " = " + tomlString(j.Options[k])
-		}
-		fmt.Fprintf(&b, "options = { %s }\n", strings.Join(parts, ", "))
 	}
 	return b.String(), nil
+}
+
+func inlineTable(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + " = " + tomlString(m[k])
+	}
+	return strings.Join(parts, ", ")
+}
+
+// SSHRouteScript prints how ssh on a machine resolves host $1 (ssh -G):
+// hostname, proxycommand and proxyjump lines.
+const SSHRouteScript = `ssh -G "$1" 2>/dev/null </dev/null | awk '$1=="hostname"||$1=="proxycommand"||$1=="proxyjump"'
+`
+
+// SSHRoute is what ssh -G reported.
+type SSHRoute struct {
+	HostName     string `json:"hostname,omitempty"`
+	ProxyCommand string `json:"proxycommand,omitempty"`
+	ProxyJump    string `json:"proxyjump,omitempty"`
+}
+
+// ParseSSHRoute reads SSHRouteScript output ("none" values are dropped).
+func ParseSSHRoute(out string) SSHRoute {
+	var r SSHRoute
+	for line := range strings.SplitSeq(out, "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
+		v = strings.TrimSpace(v)
+		if v == "none" {
+			v = ""
+		}
+		switch k {
+		case "hostname":
+			r.HostName = v
+		case "proxycommand":
+			r.ProxyCommand = v
+		case "proxyjump":
+			r.ProxyJump = v
+		}
+	}
+	return r
+}
+
+// ThroughLongarm reports whether the route is Longarm's mTLS channel
+// (ProxyCommand longarm proxy <worker>), which falls back to the hub's
+// relay when the two machines have no direct path.
+func (r SSHRoute) ThroughLongarm(host string) bool {
+	return strings.HasPrefix(host, LongarmHostPrefix) || (strings.Contains(r.ProxyCommand, "longarm") && strings.Contains(r.ProxyCommand, "proxy"))
 }
 
 // JobFileScript compares (or, with $2 = write, writes) the job on stdin with

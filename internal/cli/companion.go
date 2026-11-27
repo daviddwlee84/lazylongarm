@@ -312,6 +312,13 @@ backend, whether it is signed in (never which account).`,
 			if setup {
 				fmt.Fprintln(out, "Set up dotfiles:           lazylongarm companion dotfiles <machine>")
 			}
+			if vs, old := ferryVersions(rows); len(vs) > 1 || len(old) > 0 {
+				why := "versions differ: " + strings.Join(vs, ", ")
+				if len(old) > 0 {
+					why = "older than " + companion.MinFerryVersion + " on " + strings.Join(old, ", ")
+				}
+				fmt.Fprintf(out, "Align ferry (%s): lazylongarm companion ferry setup <machine>… --upgrade\n", why)
+			}
 			if ferryLogin {
 				fmt.Fprintln(out, "Sign ferry backends in:    lazylongarm companion ferry setup <machine> --backend <backend>")
 			}

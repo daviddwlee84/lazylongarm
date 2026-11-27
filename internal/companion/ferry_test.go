@@ -105,7 +105,7 @@ options = { remote = "gdrive:" }
 	for _, bad := range []FerryJob{
 		{Name: "x", Root: "rel", Glob: "*", Dest: "/d", Adapter: "baidupcs"},
 		{Name: "x", Root: "/r", Glob: "../*", Dest: "/d", Adapter: "baidupcs"},
-		{Name: "x", Root: "/r", Glob: "*", Dest: "/d", Adapter: "rsync"},
+		{Name: "x", Root: "/r", Glob: "*", Dest: "/d", Adapter: "scp"},
 		{Name: "x", Root: "/r", Glob: "*", Dest: "/d", Adapter: "baidupcs", DeleteSource: "always"},
 	} {
 		if _, err := bad.Render(); err == nil {
@@ -157,10 +157,62 @@ func TestBaiduPCSAssetAndAdapters(t *testing.T) {
 	if b, err := AdapterBackend("ghrelease"); err != nil || b != BackendGH {
 		t.Error(b, err)
 	}
-	if _, err := AdapterBackend("rsync"); err == nil {
-		t.Error("rsync accepted")
+	if b, err := AdapterBackend("rsync"); err != nil || b != BackendRsync {
+		t.Error(b, err)
+	}
+	if _, err := AdapterBackend("scp"); err == nil {
+		t.Error("scp accepted")
 	}
 	if n, err := FerryPlanUnits([]byte(`{"units":[{"key":"a"},{"key":"b"}]}`)); err != nil || n != 2 {
 		t.Error(n, err)
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		v, min string
+		want   bool
+	}{
+		{"0.2.0", "0.2.0", true}, {"0.10.0", "0.2.0", true}, {"v0.3", "0.2.0", true},
+		{"0.1.0", "0.2.0", false}, {"0.2.0rc1", "0.2.0", true}, {"", "0.2.0", false},
+	} {
+		if got := VersionAtLeast(tc.v, tc.min); got != tc.want {
+			t.Errorf("VersionAtLeast(%q, %q) = %v", tc.v, tc.min, got)
+		}
+	}
+	if !strings.Contains(DefaultFerrySpec, "@") {
+		t.Error("DefaultFerrySpec is not pinned")
+	}
+}
+
+func TestRsyncJobAndRoute(t *testing.T) {
+	j := FerryJob{
+		Name: "run42", Root: "/data/run42", Glob: "*", Dest: "/srv/in", Adapter: "rsync", Prefix: "/ferry/run42",
+		Options:         map[string]string{"host": "nas", "root": "/home/u/.cache/ferry/run42/landing"},
+		ReceiverAdapter: "local", ReceiverOptions: map[string]string{"root": "/home/u/.cache/ferry/run42/landing"},
+	}
+	got, err := j.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `options = { host = "nas", root = "/home/u/.cache/ferry/run42/landing" }
+
+[remote.sides.receiver]
+adapter = "local"
+options = { root = "/home/u/.cache/ferry/run42/landing" }
+`
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("got:\n%s", got)
+	}
+	r := ParseSSHRoute("hostname 100.64.0.7\nproxycommand none\nproxyjump none\n")
+	if r.HostName != "100.64.0.7" || r.ProxyCommand != "" || r.ThroughLongarm("nas") {
+		t.Fatalf("%+v", r)
+	}
+	r = ParseSSHRoute("hostname worker-2\nproxycommand /usr/local/bin/longarm proxy worker-2\n")
+	if !r.ThroughLongarm("w2") || !(SSHRoute{}).ThroughLongarm("longarm-w2") {
+		t.Fatalf("%+v", r)
+	}
+	if s, _ := ParseFerryState("ferry=/f\nrsync=/usr/bin/rsync\ndone=yes\n"); !s.Installed(BackendRsync) || !s.SignedIn(BackendRsync) {
+		t.Fatalf("%+v", s)
 	}
 }

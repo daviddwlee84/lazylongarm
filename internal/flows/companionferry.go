@@ -129,13 +129,17 @@ func BuildCompanionFerrySetup(req FerrySetupRequest, f *hostprobe.Facts, current
 		},
 	}
 
-	upgrade := req.Upgrade && current.Ferry != ""
+	outdated := current.Ferry != "" && !companion.VersionAtLeast(current.Version, companion.MinFerryVersion)
+	upgrade := current.Ferry != "" && (req.Upgrade || outdated)
 	title := "Install ferry"
-	if upgrade {
+	switch {
+	case outdated:
+		title = fmt.Sprintf("Upgrade ferry (%s is older than %s)", dash(current.Version), companion.MinFerryVersion)
+	case upgrade:
 		title = "Reinstall ferry"
 	}
 	mode := "install"
-	if req.Upgrade {
+	if req.Upgrade || outdated {
 		mode = "upgrade"
 	}
 	p.Steps = append(p.Steps, plan.Step{
@@ -143,20 +147,20 @@ func BuildCompanionFerrySetup(req FerrySetupRequest, f *hostprobe.Facts, current
 		Actions: []plan.Action{{Where: at, Display: companion.FerryInstallDisplay(req.Spec, upgrade, current.UV != "")}},
 		Check: func(ctx context.Context, env *plan.Env) (bool, error) {
 			s, err := read(ctx, env, req.Host)
-			return err == nil && s.Ferry != "" && !req.Upgrade, err
+			return err == nil && s.Ferry != "" && companion.VersionAtLeast(s.Version, companion.MinFerryVersion) && !req.Upgrade, err
 		},
 		Apply: func(ctx context.Context, env *plan.Env) error {
 			_, err := env.Run(ctx, connection.Request{Host: req.Host, Script: companion.FerryInstallScript, Args: []string{req.Spec, mode}, Timeout: 30 * time.Minute, Stall: 10 * time.Minute})
 			return err
 		},
 	})
-	if current.Ferry != "" && !req.Upgrade {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("ferry %s is already installed on %s; pass --upgrade to reinstall it from the source", dash(current.Version), f.Where()))
+	if current.Ferry != "" && !upgrade {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("ferry %s is already installed on %s; pass --upgrade to reinstall it from %s (sender and receiver need the same ferry)", dash(current.Version), f.Where(), req.Spec))
 	}
 
 	for _, b := range req.Backends {
 		installable := current.Installed(b)
-		if b == companion.BackendBaiduPCS {
+		if b == companion.BackendBaiduPCS && !current.Installed(b) {
 			installable = true
 			url := companion.BaiduPCSURL(companion.BaiduPCSVersion, baiduAsset)
 			p.Steps = append(p.Steps, plan.Step{
@@ -171,9 +175,7 @@ func BuildCompanionFerrySetup(req FerrySetupRequest, f *hostprobe.Facts, current
 					return err
 				},
 			})
-			if !current.Installed(b) {
-				p.Warnings = append(p.Warnings, "BaiduPCS-Go publishes no checksums: the binary is fetched over HTTPS from its GitHub releases")
-			}
+			p.Warnings = append(p.Warnings, "BaiduPCS-Go publishes no checksums: the binary is fetched over HTTPS from its GitHub releases")
 		} else if !current.Installed(b) {
 			p.Warnings = append(p.Warnings, fmt.Sprintf("%s is not installed on %s: install it with the system's package manager, then rerun this", b, f.Where()))
 		}
@@ -287,6 +289,10 @@ type FerryPairRequest struct {
 	// Service installs ferry's systemd user units (receiver, then sender) on
 	// Linux machines; the transfer starts with them.
 	Service bool
+	// RsyncHost is the ssh host the sender pushes to (rsync jobs) and
+	// RsyncRoute how ssh on the sender resolves it.
+	RsyncHost  string
+	RsyncRoute companion.SSHRoute
 }
 
 // BuildCompanionFerryPair plans write the job on both machines → ferry
@@ -304,15 +310,23 @@ func BuildCompanionFerryPair(req FerryPairRequest, sender, receiver companion.Fe
 	if err != nil {
 		return nil, err
 	}
-	var problems []string
+	var problems, outdated []string
 	for _, side := range []struct {
 		end   FerryEnd
 		state companion.FerryState
 	}{{req.Sender, sender}, {req.Receiver, receiver}} {
 		setup := "lazylongarm companion ferry setup " + side.end.Name + " --backend " + backend
+		if backend == companion.BackendRsync {
+			setup = "lazylongarm companion ferry setup " + side.end.Name
+		}
 		switch {
 		case side.state.Ferry == "":
 			problems = append(problems, fmt.Sprintf("ferry is not installed on %s (run: %s)", side.end.Name, setup))
+		case !companion.VersionAtLeast(side.state.Version, companion.MinFerryVersion):
+			outdated = append(outdated, side.end.Name)
+			problems = append(problems, fmt.Sprintf("ferry %s on %s is older than %s", dash(side.state.Version), side.end.Name, companion.MinFerryVersion))
+		case backend == companion.BackendRsync && !side.state.Installed(backend):
+			problems = append(problems, fmt.Sprintf("rsync is not installed on %s (install it with the system's package manager)", side.end.Name))
 		case !side.state.Installed(backend):
 			problems = append(problems, fmt.Sprintf("%s is not installed on %s (run: %s)", backend, side.end.Name, setup))
 		case !side.state.SignedIn(backend):
@@ -320,6 +334,16 @@ func BuildCompanionFerryPair(req FerryPairRequest, sender, receiver companion.Fe
 		case backend == companion.BackendRclone && !side.state.HasRcloneRemote(req.Job.Options["remote"]):
 			problems = append(problems, fmt.Sprintf("rclone on %s has no remote %q (add it there with rclone config)", side.end.Name, req.Job.Options["remote"]))
 		}
+	}
+	if len(outdated) > 0 {
+		problems = append(problems, "run: lazylongarm companion ferry setup "+strings.Join(outdated, " ")+" --upgrade")
+	}
+	if len(problems) == 0 && sender.Version != receiver.Version {
+		problems = append(problems, fmt.Sprintf("ferry versions differ (%s %s, %s %s): sender and receiver must run the same ferry (run: lazylongarm companion ferry setup %s %s --upgrade)",
+			req.Sender.Name, dash(sender.Version), req.Receiver.Name, dash(receiver.Version), req.Sender.Name, req.Receiver.Name))
+	}
+	if backend == companion.BackendRsync && (req.RsyncHost == "" || req.Job.Options["host"] != req.RsyncHost) {
+		problems = append(problems, "an rsync job needs the ssh host the sender pushes to")
 	}
 	if len(problems) > 0 {
 		return nil, errors.New(strings.Join(problems, "; "))
@@ -332,6 +356,13 @@ func BuildCompanionFerryPair(req FerryPairRequest, sender, receiver companion.Fe
 	relay := req.Job.Adapter + " " + req.Job.Prefix
 	for _, k := range slices.Sorted(maps.Keys(req.Job.Options)) {
 		relay += fmt.Sprintf(" (%s %s)", k, req.Job.Options[k])
+	}
+	if backend == companion.BackendRsync {
+		relay = fmt.Sprintf("rsync over ssh from %s to %s", req.Sender.Name, req.RsyncHost)
+		if h := req.RsyncRoute.HostName; h != "" && h != req.RsyncHost {
+			relay += " (" + h + ")"
+		}
+		relay += ", landing in " + req.Job.Options["root"] + " on " + req.Receiver.Name
 	}
 	sources := "kept (delete_source = never)"
 	if d := req.Job.DeleteSource; d != "" && d != "never" {
@@ -353,7 +384,18 @@ func BuildCompanionFerryPair(req FerryPairRequest, sender, receiver companion.Fe
 	if d := req.Job.DeleteSource; d != "" && d != "never" {
 		p.Warnings = append(p.Warnings, "delete_source = "+d+": ferry deletes source units on "+req.Sender.Name+" after they are relayed")
 	}
-	p.Warnings = append(p.Warnings, "the data goes through the "+req.Job.Adapter+" relay, not the Longarm hub; backend quotas and the relay's own limits apply")
+	if backend == companion.BackendRsync {
+		r := req.RsyncRoute
+		if r.ThroughLongarm(req.RsyncHost) {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("%s reaches %s through Longarm (%s): without a direct path between the two machines the data takes the hub's relay; prefer a direct route (LAN, tailnet) or a cloud relay (--via baidupcs|rclone|ghrelease)", req.Sender.Name, req.RsyncHost, dash(r.ProxyCommand)))
+		}
+		if r.ProxyJump != "" {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("%s reaches %s through the jump host %s: the data passes through it", req.Sender.Name, req.RsyncHost, r.ProxyJump))
+		}
+		p.Warnings = append(p.Warnings, fmt.Sprintf("rsync needs non-interactive ssh (a key) from %s to %s, and %q must name %s there; ferry doctor on the sender checks it", req.Sender.Name, req.RsyncHost, req.RsyncHost, req.Receiver.Name))
+	} else {
+		p.Warnings = append(p.Warnings, "the data goes through the "+req.Job.Adapter+" relay, not the Longarm hub; backend quotas and the relay's own limits apply")
+	}
 
 	for i, end := range []FerryEnd{req.Sender, req.Receiver} {
 		display := "write " + end.JobPath + " (refuses to replace a different file)\n" + strings.TrimRight(body, "\n")
@@ -514,4 +556,13 @@ func ReadCompanionState(ctx context.Context, env *plan.Env, host string) (Compan
 	s.Dotfiles, s.DotfilesErr = companion.ParseState(dot)
 	s.Ferry, s.FerryErr = companion.ParseFerryState(fer)
 	return s, nil
+}
+
+// ReadSSHRoute reports how ssh on host resolves target (ssh -G).
+func ReadSSHRoute(ctx context.Context, env *plan.Env, host, target string) (companion.SSHRoute, error) {
+	res, err := env.RunQuiet(ctx, connection.Request{Host: host, Script: companion.SSHRouteScript, Args: []string{target}, Timeout: 30 * time.Second})
+	if err != nil {
+		return companion.SSHRoute{}, err
+	}
+	return companion.ParseSSHRoute(string(res.Stdout)), nil
 }

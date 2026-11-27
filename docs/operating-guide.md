@@ -481,8 +481,11 @@ lazylongarm companion ferry pair worker-1:/data/exports worker-2:~/in \
 ```
 
 `setup` installs uv into `~/.local/bin` when missing and then ferry with
-`uv tool install` (from `[companions.ferry] install`, else the ferry
-repository). The `baidupcs` backend downloads BaiduPCS-Go from its GitHub
+`uv tool install`, from `[companions.ferry] install`, else a ferry version this
+lazylongarm pins (sender and receiver share relay formats that may change
+between 0.x versions, so machines set up together get the same ferry). A
+ferry older than 0.2.0 is upgraded; `--upgrade` reinstalls from the source,
+which aligns machines set up at different times. The `baidupcs` backend downloads BaiduPCS-Go from its GitHub
 releases into `~/.local/bin`; rclone and gh come from the system's package
 manager. A backend that is not signed in gets its own login (`BaiduPCS-Go
 login`, `rclone config`, `gh auth login`) in your terminal over `ssh -tt`.
@@ -490,8 +493,8 @@ lazylongarm checks only *whether* a backend is signed in, never which account,
 and records the ferry version and signed-in backend names on the target.
 `--no-login` skips the logins and says what to run.
 
-`pair <sender>:<path> <receiver>:<path>` checks that both machines have ferry
-and the relay's backend signed in, then writes **one** job file,
+`pair <sender>:<path> <receiver>:<path>` checks that both machines run the
+same ferry (at least 0.2.0) and have the relay's backend signed in, then writes **one** job file,
 `~/.config/ferry/jobs/<name>.toml`, on both (ferry's own wizard uses the same
 location). It refuses to replace a different file there. Then it runs
 `ferry doctor` on each side and `ferry plan` on the sender, and records the
@@ -501,19 +504,27 @@ pair under `[[companions.ferry.jobs]]`. Paths are on each machine: absolute,
 | Choice | Default | Flag |
 |---|---|---|
 | units | each entry of a directory source; a file source is one unit | `--glob` (relative to the directory) |
-| relay | `baidupcs`, prefix `/ferry/<name>` | `--via rclone --remote R`, `--via ghrelease --repo owner/name [--tag T]`, `--prefix` |
+| relay | `baidupcs`, prefix `/ferry/<name>` | `--via rclone --remote R`, `--via ghrelease --repo owner/name [--tag T]`, `--via rsync [--ssh-host H] [--landing DIR]`, `--prefix` |
 | destination | tar archives kept under the destination | `--extract` unpacks (each unit path is replaced whole) |
 | sources | kept (`delete_source = "never"`) | `--delete-source after_remote_size\|after_receiver_ack` |
 | egress | `direct` (`ferry doctor` checks the route to the relay) | edit the job file |
 | start | nothing runs; the next steps are printed | `--service` installs ferry's systemd user units (Linux), receiver first |
 
-There is no `--via rsync`: when two machines reach each other, `longarm cp`
-already takes the direct path, and rsync over a `longarm-<worker>` alias
-would put the data back on the hub's relay.
+`--via rsync` skips the cloud: the sender pushes over ssh into a landing
+directory on the receiver (default `~/.cache/ferry/<name>/landing`), and the
+receiver reads it locally. You still get ferry's units, sha256 checks,
+resumption and change detection. The sender needs non-interactive ssh (a key)
+to the receiver. `--ssh-host` is how the *sender* reaches it (default: the
+receiver's SSH host here, which must also resolve there), and `ferry doctor`
+on the sender checks the connection. Use it only on a direct route (LAN,
+tailnet). A host that goes through `longarm proxy` (a `longarm-<worker>`
+alias) takes the hub's relay whenever the two workers have no direct path,
+and so does `longarm cp`, so the plan warns when it sees one. It also warns
+when it sees a `ProxyJump`.
 
 ```toml
 [companions.ferry]
-# install = "git+https://github.com/daviddwlee84/ferry@<tag>"   # pin a version
+# install = "git+https://github.com/daviddwlee84/ferry@<tag or commit>"   # override the pinned version
 backends = ["baidupcs"]
 ```
 
